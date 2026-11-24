@@ -1045,6 +1045,73 @@ CREATE INDEX "mcp_tool_calls_thread_id_idx" ON "mcp_tool_calls"("thread_id");
 CREATE INDEX "mcp_tool_calls_status_idx" ON "mcp_tool_calls"("status");
 CREATE INDEX "mcp_tool_approvals_workspace_status_idx" ON "mcp_tool_approvals"("workspace_id", "status");
 CREATE INDEX "mcp_tool_approvals_expires_at_idx" ON "mcp_tool_approvals"("expires_at");
+
+-- ============================================================================
+-- 10. LOCAL AGENT BRIDGE & DEVICE CONNECTIVITY (PHASE 4A)
+-- ============================================================================
+
+CREATE TYPE "DeviceStatus" AS ENUM ('PENDING_APPROVAL', 'ACTIVE', 'PAUSED', 'REVOKED');
+CREATE TYPE "PairingChallengeStatus" AS ENUM ('PENDING', 'CLAIMED', 'CONSUMED', 'EXPIRED', 'REJECTED');
+
+-- Paired Physical / Virtual Workstations
+CREATE TABLE "bridge_devices" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "workspace_id" UUID NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+    "user_id" UUID NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+    "name" VARCHAR(128) NOT NULL,
+    "public_key" TEXT NOT NULL,
+    "public_key_fingerprint" VARCHAR(128) NOT NULL,
+    "platform" VARCHAR(32) NOT NULL,
+    "architecture" VARCHAR(32) NOT NULL,
+    "bridge_version" VARCHAR(32) NOT NULL,
+    "status" "DeviceStatus" NOT NULL DEFAULT 'PENDING_APPROVAL',
+    "last_seen_at" TIMESTAMPTZ(6),
+    "metadata" JSONB NOT NULL DEFAULT '{}',
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(6) NOT NULL,
+    PRIMARY KEY ("id")
+);
+
+-- Ephemeral Pairing Challenges (256-bit Code Hash, 5m TTL)
+CREATE TABLE "device_pairing_challenges" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "workspace_id" UUID NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+    "initiated_by_user_id" UUID NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+    "challenge_hash" VARCHAR(64) NOT NULL,
+    "status" "PairingChallengeStatus" NOT NULL DEFAULT 'PENDING',
+    "failed_attempts" INTEGER NOT NULL DEFAULT 0,
+    "claimed_device_id" UUID REFERENCES "bridge_devices"("id") ON DELETE SET NULL,
+    "expires_at" TIMESTAMPTZ(6) NOT NULL,
+    "claimed_at" TIMESTAMPTZ(6),
+    "consumed_at" TIMESTAMPTZ(6),
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(6) NOT NULL,
+    PRIMARY KEY ("id")
+);
+
+-- Persistent Device Connection Session Audit History
+CREATE TABLE "device_connection_sessions" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "device_id" UUID NOT NULL REFERENCES "bridge_devices"("id") ON DELETE CASCADE,
+    "workspace_id" UUID NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+    "client_ip" VARCHAR(64),
+    "user_agent" VARCHAR(256),
+    "connected_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "disconnected_at" TIMESTAMPTZ(6),
+    "disconnect_reason" TEXT,
+    "last_heartbeat_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "session_metadata" JSONB NOT NULL DEFAULT '{}',
+    PRIMARY KEY ("id")
+);
+
+CREATE INDEX "bridge_devices_workspace_id_idx" ON "bridge_devices"("workspace_id");
+CREATE INDEX "bridge_devices_user_id_idx" ON "bridge_devices"("user_id");
+CREATE INDEX "bridge_devices_fingerprint_idx" ON "bridge_devices"("public_key_fingerprint");
+CREATE INDEX "device_pairing_challenges_workspace_id_idx" ON "device_pairing_challenges"("workspace_id");
+CREATE INDEX "device_pairing_challenges_hash_idx" ON "device_pairing_challenges"("challenge_hash");
+CREATE INDEX "device_pairing_challenges_expires_at_idx" ON "device_pairing_challenges"("expires_at");
+CREATE INDEX "device_connection_sessions_device_id_idx" ON "device_connection_sessions"("device_id");
+CREATE INDEX "device_connection_sessions_workspace_id_idx" ON "device_connection_sessions"("workspace_id");
 ```
 
 ---

@@ -299,33 +299,40 @@ The Local Agent Bridge is a critical architectural differentiator of Messiah. It
 - **Resource Footprint**: < 50MB RAM footprint when idle; near-zero CPU usage.
 - **Outbound Only**: Does NOT listen on `0.0.0.0` or open any local HTTP/TCP ports. Eliminates attack surfaces from local network eavesdroppers.
 
-### 6.2 Mutual Authentication & Pairing Sequence
+### 6.2 Mutual Authentication & Pairing Sequence (Phase 4A Implemented)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as User on Web / Mobile
+    actor Admin as Workspace Owner/Admin (Web)
     participant Backend as Messiah Cloud Backend
     participant DB as PostgreSQL
+    participant Redis as Redis Ephemeral Presence
     participant Daemon as Local Bridge Daemon (Machine)
 
-    User->>Backend: Request Device Pairing Code
-    Backend->>Backend: Generate 8-character OTP + 256-bit Nonce
-    Backend->>DB: Store hashed Pairing Token (5-minute TTL)
-    Backend-->>User: Display Pairing Code & CLI Command: `messiah-bridge pair <code>`
+    Admin->>Backend: POST /api/v1/devices/pair/initiate
+    Backend->>Backend: Generate 256-bit random code (MSH-XXXX-XXXX-XXXX)
+    Backend->>DB: Store SHA-256 hash (challengeHash, 5-minute TTL)
+    Backend-->>Admin: Display Pairing Code & CLI Command: `messiah-bridge pair <code>`
 
-    User->>Daemon: Executes `messiah-bridge pair <code>`
-    Daemon->>Daemon: Generate Ed25519 Keypair locally
-    Daemon->>Backend: POST /api/devices/pair (OTP, Device Info, Public Key)
-    Backend->>DB: Verify OTP, check expiry, bind Public Key to User & Workspace
-    Backend->>DB: Mark Pairing Token consumed
-    Backend-->>Daemon: Issue Long-Lived Scoped Device Certificate & ID
-    Daemon->>Daemon: Store Private Key in OS Keychain (macOS Keychain / WinCred / SecretService)
+    Admin->>Daemon: Executes `messiah-bridge pair MSH-...`
+    Daemon->>Daemon: Generate Ed25519 Keypair locally (Node crypto)
+    Daemon->>Daemon: Compute SHA-256 SPKI DER Fingerprint
+    Daemon->>Backend: POST /api/v1/devices/pair/claim (Code, Public Key PEM, Fingerprint, OS Info)
+    Backend->>DB: Verify Code Hash, Fingerprint, state -> CLAIMED, Device -> PENDING_APPROVAL
+    Backend-->>Daemon: Device Registered (Pending Admin Approval)
 
-    Daemon->>Backend: WSS Connect to /bridge/v1 (Signed Handshake with Ed25519)
-    Backend->>Backend: Verify Signature against stored Public Key
-    Backend-->>Daemon: Handshake Accepted (Status: ONLINE)
-    Backend-->>User: Device Status updates to ONLINE in Realtime UI
+    Admin->>Backend: POST /api/v1/devices/pair/approve (Review Fingerprint, Device Name)
+    Backend->>DB: Transaction: Challenge -> CONSUMED, Device -> ACTIVE
+
+    Daemon->>Backend: Outbound WSS /api/v1/devices/connect
+    Backend-->>Daemon: device.challenge (nonce, serverAudience, protocolVersion, expiresAt)
+    Daemon->>Daemon: Sign canonical payload: MESSIAH_DEVICE_AUTH:... using Ed25519 private key
+    Daemon->>Backend: device.auth.proof (signature, challengeId, timestamp)
+    Backend->>Backend: Verify signature against DB SPKI PEM
+    Backend->>Redis: Set ephemeral presence messiah:device:presence:<deviceId> (TTL 45s)
+    Backend-->>Daemon: device.auth.success (heartbeat: 15000ms)
+    Backend-->>Admin: Device Status updates to ONLINE with live pulse in Realtime UI
 ```
 
 ### 6.3 Sandboxed Execution Engine & Defense-in-Depth

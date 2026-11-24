@@ -1,7 +1,7 @@
 # MESSIAH — The Universal AI Agent Workspace
 
 > **Tagline:** One intelligence layer. Every agent. Every device.  
-> **Stage:** Phase 3B Complete — MCP Tool Execution & Controlled Multi-Turn Agent Engine  
+> **Stage:** Phase 4A Complete — Bridge Foundation & Secure Device Connectivity  
 > **License:** UNLICENSED (Proprietary)
 
 ---
@@ -31,17 +31,18 @@ Messiah is structured as a **Turborepo** monorepo managed with **pnpm workspaces
 ```
 messiah/
 ├── apps/
+│   ├── bridge-daemon/               # Lightweight Local Agent Bridge CLI daemon (messiah-bridge)
 │   ├── web/                         # Next.js 16 (React 19) Command Center Web UI
-│   │   ├── app/                     # App Router pages (/login, /signup, /chat, /settings/integrations)
+│   │   ├── app/                     # App Router pages (/login, /signup, /chat, /settings/mcp, /settings/devices)
 │   │   ├── components/              # ChatWorkspace, MarkdownRenderer, Header, Sidebar
 │   │   └── lib/                     # Supabase client, auth helpers, API clients
 │   ├── worker/                      # BullMQ background chat execution worker
 │   └── server/                      # Fastify 5 Modular Monolith API Gateway
 │       ├── src/config/              # Strict environment validation (Zod)
 │       ├── src/plugins/             # Security (Cors, Helmet), Prisma, Redis, Auth, WebSocket
-│       ├── src/routes/              # /threads*, /runs*, /realtime*, /providers*, /mcp*, /workspaces*
-│       ├── src/services/            # ChatService, McpServerService, VaultService, ReconciliationService
-│       └── src/tests/               # Vitest test suites (182 passing tests across monorepo)
+│       ├── src/routes/              # /threads*, /runs*, /realtime*, /providers*, /mcp*, /devices*, /workspaces*
+│       ├── src/services/            # ChatService, McpServerService, DeviceServices, VaultService
+│       └── src/tests/               # Vitest test suites (227 passing tests across monorepo)
 ├── packages/
 │   ├── mcp/                         # Model Context Protocol SDK v2, SSRF security & registry
 │   ├── providers/                   # Official AI SDK adapters (OpenAI, Anthropic, Gemini)

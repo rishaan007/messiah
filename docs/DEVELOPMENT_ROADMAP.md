@@ -170,20 +170,32 @@ gantt
 
 ---
 
-### Phase 4: Local Agent Bridge & Device Management (NEXT)
+### Phase 4A: Bridge Foundation & Secure Device Connectivity (COMPLETE)
 
-- **Primary Goal**: Build the headless Local Agent Bridge daemon, establish the outbound-only WebSocket pairing protocol, and deliver the Human-in-the-Loop (HITL) approval broker.
+- **Primary Goal**: Build the complete foundation for Messiah's Local Agent Bridge daemon (`apps/bridge-daemon`) and server connectivity infrastructure (`/api/v1/devices/connect`), establishing outbound-only secure WebSocket connections from user computers (macOS ARM64/x64, Linux, Windows) to Messiah Cloud without exposing inbound network ports on user machines.
 - **Key Deliverables**:
-  - **Bridge CLI Daemon**: Lightweight Node.js/TypeScript daemon (`messiah-bridge`).
-  - **Pairing Handshake**: Ephemeral OTP pairing flow, Ed25519 keypair generation, OS keychain storage.
+  - **Bridge CLI Daemon (`apps/bridge-daemon`)**: Autonomous Node.js/TypeScript background application (`messiah-bridge`) with subcommands `start`, `pair`, `status`, `unpair`, and `diagnostics`.
+  - **Device-Bound Cryptographic Identity**: Hardware/OS-bound Ed25519 keypair generation. Private keys stored exclusively in OS credential stores (macOS Keychain via `security` CLI or AES-256-GCM encrypted vault `~/.messiah/bridge/device.vault` with POSIX `0600` permissions and PBKDF2 100,000 iterations). Private keys are never transmitted over the network.
+  - **SPKI DER Fingerprinting**: Unique, deterministic SHA-256 public key fingerprinting (`SHA256:<64-hex>`) verified independently by client and server.
+  - **Outbound-Only WebSocket Gateway (`/api/v1/devices/connect`)**: Server-issued cryptographic challenges (`device.challenge`) featuring 256-bit cryptographically secure nonces, 30s TTL, and canonical payload signing (`MESSIAH_DEVICE_AUTH:...`).
+  - **Secure Pairing Protocol**: 256-bit human-readable pairing codes (`MSH-XXXX-XXXX-XXXX`), 5-minute TTL, SHA-256 hashed storage, brute-force rate limiting, and atomic approval governance.
+  - **Dual Heartbeat & Presence Engine**: 15s bidirectional ping/pong loop, 45s server watchdog, and Redis-backed ephemeral presence (`messiah:device:presence:<deviceId>`) with pub/sub remote disconnection for pause/revocation.
+  - **Web Device Management UI (`apps/web`)**: Next.js 16 Obsidian dashboard at `/settings/devices` with real-time stat cards, pending review banners, active device cards with live pulses, pairing modal with 5m countdown, and full connection session audit history.
+  - **Database Migration `6_bridge_devices`**: Added `BridgeDevice`, `DevicePairingChallenge`, and `DeviceConnectionSession` models with strict workspace tenant isolation.
+  - **Automated Verification**: 227 automated tests passing monorepo-wide (19 new server integration tests in `bridgeDevices.test.ts` + 8 bridge daemon unit tests in `deviceIdentity.test.ts` and `keystore.test.ts` + 200 monorepo tests across all packages).
+- **Status**: Completed.
+
+---
+
+### Phase 4B: Local Tool Execution, Workstation Sandboxing & Real-Time Broker (NEXT)
+
+- **Primary Goal**: Enable the Messiah Agent Engine to securely execute local tools on paired workstations via the established WebSocket connection, guarded by canonical path containment, command allowlists, and real-time Human-in-the-Loop (HITL) approval modals.
+- **Key Deliverables**:
+  - **Local Tool Protocol**: RPC framing over established WebSocket connection for local tool execution requests and streaming responses.
   - **Sandboxed Runner**: Canonical path containment (`realpath`), command blacklist validator, and clean subprocess spawning.
-  - **Approval Broker**: Interactive push modal on Web/Mobile for Level 2 commands with cryptographic nonce verification.
-  - **Device Console**: Dashboard displaying connected devices, OS metrics, bridge status, and one-click revocation.
-- **Automated Verification**:
-  - Path traversal attack penetration test: 20+ malicious paths (`../`, symlinks) attempting sandbox escape blocked.
-  - Blacklist validation tests: `rm -rf`, `sudo`, `curl | bash` rejected immediately.
-  - Outbound pairing test: End-to-end device pairing completed without opening any inbound ports.
-- **Exit Criteria**: User can pair their local machine, run a prompt on the web UI, approve a `git status` or `npm test` command via the modal, and view live terminal output streamed to the browser.
+  - **Approval Broker**: Interactive push modal on Web/Mobile for workstation commands with cryptographic nonce verification.
+  - **Local MCP Server Stdio Spawning**: Spawning and managing local MCP server processes over stdio on the user's workstation.
+- **Status**: Next Milestone.
 
 ---
 

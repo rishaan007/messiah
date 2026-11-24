@@ -529,4 +529,175 @@ export interface ToolApprovalInfo {
   toolCall?: ToolCallInfo | null;
 }
 
+// ==============================================================================
+// Bridge Device & Secure Connectivity Types (Phase 4A)
+// ==============================================================================
+
+export type BridgeDeviceStatus = "PENDING_APPROVAL" | "ACTIVE" | "PAUSED" | "REVOKED";
+export type PairingChallengeStatus = "PENDING" | "CLAIMED" | "CONSUMED" | "EXPIRED" | "REJECTED";
+export type BridgePlatform = "darwin" | "win32" | "linux" | string;
+export type BridgeArchitecture = "arm64" | "x64" | string;
+
+export interface BridgeDeviceInfo {
+  id: string;
+  workspaceId: string;
+  ownerUserId: string;
+  displayName: string;
+  platform: string;
+  architecture: string;
+  bridgeVersion: string;
+  publicKey: string;
+  publicKeyFingerprint: string;
+  protocolVersion: string;
+  status: BridgeDeviceStatus;
+  isOnline: boolean;
+  lastSeenAt: string | null;
+  lastConnectedAt: string | null;
+  pairedAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DevicePairingChallengeInfo {
+  id: string;
+  workspaceId: string;
+  requestedByUserId: string;
+  claimedDeviceId: string | null;
+  claimedDeviceName: string | null;
+  claimedPlatform: string | null;
+  claimedArchitecture: string | null;
+  claimedBridgeVersion: string | null;
+  claimedFingerprint: string | null;
+  status: PairingChallengeStatus;
+  expiresAt: string;
+  consumedAt: string | null;
+  createdAt: string;
+}
+
+export interface CreatePairingChallengeResponse {
+  challengeId: string;
+  pairingCode: string;
+  expiresAt: string;
+}
+
+export interface ClaimPairingChallengeInput {
+  pairingCode: string;
+  displayName: string;
+  platform: string;
+  architecture: string;
+  bridgeVersion: string;
+  publicKey: string;
+  publicKeyFingerprint: string;
+}
+
+export interface ClaimPairingChallengeResponse {
+  deviceId: string;
+  status: "PENDING_APPROVAL";
+  message: string;
+}
+
+// WebSocket Protocol Frames (Server to Bridge)
+export interface ServerChallengeFrame {
+  type: "device.challenge";
+  challengeId: string;
+  nonce: string;
+  serverAudience: string;
+  timestamp: number;
+  protocolVersion: string;
+  expiresAt: number;
+}
+
+export interface ServerAuthSuccessFrame {
+  type: "device.auth.success";
+  sessionId: string;
+  deviceId: string;
+  displayName: string;
+  heartbeatIntervalMs: number;
+  sessionExpiresAt: string;
+}
+
+export interface ServerAuthFailedFrame {
+  type: "device.auth.failed";
+  code: string;
+  message: string;
+}
+
+export interface ServerHeartbeatAckFrame {
+  type: "device.heartbeat.ack";
+  timestamp: number;
+  sequence: number;
+}
+
+export interface ServerSessionExpiringFrame {
+  type: "device.session.expiring";
+  expiresAt: string;
+}
+
+export interface ServerDeviceRevokedFrame {
+  type: "device.revoked";
+  reason: string;
+}
+
+export interface ServerProtocolErrorFrame {
+  type: "device.protocol.error";
+  code: string;
+  message: string;
+}
+
+export type ServerToDeviceFrame =
+  | ServerChallengeFrame
+  | ServerAuthSuccessFrame
+  | ServerAuthFailedFrame
+  | ServerHeartbeatAckFrame
+  | ServerSessionExpiringFrame
+  | ServerDeviceRevokedFrame
+  | ServerProtocolErrorFrame;
+
+// WebSocket Protocol Frames (Bridge to Server)
+export interface BridgeAuthProofFrame {
+  type: "device.auth.proof";
+  deviceId: string;
+  challengeId: string;
+  signature: string; // base64
+  timestamp: number;
+  metadata: {
+    platform: string;
+    architecture: string;
+    bridgeVersion: string;
+  };
+}
+
+export interface BridgeHeartbeatFrame {
+  type: "device.heartbeat";
+  timestamp: number;
+  sequence: number;
+}
+
+export interface BridgeStatusFrame {
+  type: "device.status";
+  status: "online" | "idle" | "busy";
+  uptimeSeconds: number;
+  memoryUsageMb: number;
+}
+
+export interface BridgeDiagnosticsFrame {
+  type: "device.diagnostics";
+  nodeVersion: string;
+  osRelease: string;
+  connectionLatencyMs?: number;
+}
+
+export interface BridgeDisconnectFrame {
+  type: "device.disconnect";
+  reason?: string;
+}
+
+export type DeviceToServerFrame =
+  | BridgeAuthProofFrame
+  | BridgeHeartbeatFrame
+  | BridgeStatusFrame
+  | BridgeDiagnosticsFrame
+  | BridgeDisconnectFrame;
+
 

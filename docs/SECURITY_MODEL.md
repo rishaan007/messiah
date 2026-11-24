@@ -397,4 +397,36 @@ Every security-sensitive event writes an immutable record to the `audit_logs` ta
 
 ---
 
+## 13. Local Agent Bridge Security & Device Identity (Phase 4A)
+
+### 13.1 Zero Inbound Ports
+- The Messiah Local Agent Bridge daemon binds zero TCP or UDP listener sockets.
+- All communications are strictly outbound TLS/WSS (`wss://`) initiated from the user's computer to Messiah Cloud.
+- Corporate firewalls, NAT routers, and VPNs are traversed seamlessly without port forwarding or UPnP punch-throughs.
+
+### 13.2 Asymmetric Ed25519 Device Cryptography
+- Every bridge instance generates an Ed25519 keypair locally on first launch.
+- Private keys are stored in the host OS credential store (macOS Keychain or AES-256-GCM encrypted vault `~/.messiah/bridge/device.vault` with POSIX `0600` permissions and PBKDF2 100,000 iterations).
+- Private keys are **never transmitted** over the network, written to logs, or exposed to the web application.
+- Public keys are stored in the cloud database as SubjectPublicKeyInfo (SPKI) PEM along with an immutable SHA-256 binary DER fingerprint (`SHA256:<64-hex>`).
+
+### 13.3 Ephemeral Cryptographic Challenge-Response Protocol
+- WebSockets at `/api/v1/devices/connect` enforce immediate challenge-response authentication.
+- Server issues a 256-bit cryptographic nonce, 30s TTL, audience tag, and protocol version.
+- Bridge signs canonical ASCII string `MESSIAH_DEVICE_AUTH:<deviceId>:<challengeId>:<nonce>:<serverAudience>:<protocolVersion>:<expiresAt>`.
+- Any signature mismatch, expired challenge, paused device, or revoked device results in immediate socket termination (`4401`, `4403`, `4410`).
+
+### 13.4 256-Bit Pairing Secrets with Hashed Storage & Rate Limiting
+- Pairing is initiated by workspace `OWNER` or `ADMIN`.
+- The server generates a 256-bit random code (`MSH-XXXX-XXXX-XXXX`) and persists **only its SHA-256 hash** (`challengeHash`).
+- Challenges expire in 5 minutes (300 seconds).
+- Failed claim attempts are rate-limited and invalidate the challenge after 5 failures.
+- Activation requires explicit workspace admin review and approval on the web dashboard.
+
+### 13.5 Strict Phase 4A Boundary Enforcement
+- In Phase 4A, the bridge daemon is strictly bounded to connection maintenance, heartbeat keepalive (15s/45s), and diagnostic reachability.
+- No remote command execution, shell spawning, child processes, filesystem reading/writing, terminal sessions, or browser automation capabilities exist in Phase 4A.
+
+---
+
 _End of Document: Messiah Security Architecture & Zero-Trust Model._

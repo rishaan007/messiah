@@ -32,6 +32,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@messiah/bridge-daemon": "workspace:*",
     "@messiah/config": "workspace:*",
     "@types/node": "^24.0.0",
     "@types/ws": "^8.18.2",

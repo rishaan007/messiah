@@ -19,7 +19,9 @@ import { runsRoutes } from "./routes/api/v1/runs.js";
 import { realtimeRoutes } from "./routes/api/v1/realtime.js";
 import { mcpRoutes } from "./routes/api/v1/mcp.js";
 import { toolApprovalRoutes } from "./routes/api/v1/toolApprovals.js";
+import { deviceRoutes } from "./routes/api/v1/devices.js";
 import { streamPublisher, ticketService, cancellationService, chatQueueManager, chatWorkerManager, ReconciliationService } from "./services/chat/index.js";
+import { devicePresenceService } from "./services/devices/index.js";
 import { createLogger } from "./utils/logger.js";
 
 export interface BuildAppOptions {
@@ -68,6 +70,7 @@ export async function buildApp(opts: BuildAppOptions) {
   streamPublisher.setRedis(app.redis);
   ticketService.setRedis(app.redis);
   cancellationService.setRedis(app.redis);
+  devicePresenceService.setRedis(app.redis);
   if (opts.env.REDIS_URL) {
     chatQueueManager.initialize(opts.env.REDIS_URL);
     // In test environment or when explicitly configured, run embedded worker to process jobs
@@ -147,6 +150,7 @@ export async function buildApp(opts: BuildAppOptions) {
   await app.register(realtimeRoutes, { prefix: "/api/v1" });
   await app.register(mcpRoutes);
   await app.register(toolApprovalRoutes, { prefix: "/api/v1" });
+  await app.register(deviceRoutes, { prefix: "/api/v1" });
 
   return app;
 }

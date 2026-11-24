@@ -216,4 +216,147 @@ export const UpdateMcpToolPermissionSchema = z.object({
 });
 export type UpdateMcpToolPermissionInput = z.infer<typeof UpdateMcpToolPermissionSchema>;
 
+// ==============================================================================
+// Bridge Device & Secure Connectivity Schemas (Phase 4A)
+// ==============================================================================
+
+export const CreatePairingChallengeSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+});
+export type CreatePairingChallengeInput = z.infer<typeof CreatePairingChallengeSchema>;
+
+export const ClaimPairingChallengeSchema = z.object({
+  pairingCode: z.string().trim().min(8, "Pairing code too short").max(64, "Pairing code too long"),
+  displayName: z.string().trim().min(1, "Display name required").max(128, "Display name too long"),
+  platform: z.string().trim().min(1).max(32),
+  architecture: z.string().trim().min(1).max(32),
+  bridgeVersion: z.string().trim().min(1).max(64),
+  publicKey: z.string().trim().min(32, "Invalid public key").max(4096),
+  publicKeyFingerprint: z.string().trim().min(16).max(128),
+});
+export type ClaimPairingChallengeInputSchema = z.infer<typeof ClaimPairingChallengeSchema>;
+
+export const ApprovePairingSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+});
+
+export const RejectPairingSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  reason: z.string().trim().max(512).optional(),
+});
+
+export const RenameDeviceSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  displayName: z.string().trim().min(1, "Display name required").max(128, "Display name too long"),
+});
+
+export const DeviceActionSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+});
+
+// WebSocket Protocol Frames
+export const ServerChallengeFrameSchema = z.object({
+  type: z.literal("device.challenge"),
+  challengeId: z.string().min(1),
+  nonce: z.string().min(16),
+  serverAudience: z.string().min(1),
+  timestamp: z.number().int(),
+  protocolVersion: z.string(),
+  expiresAt: z.number().int(),
+});
+
+export const ServerAuthSuccessFrameSchema = z.object({
+  type: z.literal("device.auth.success"),
+  sessionId: z.string().uuid(),
+  deviceId: z.string().uuid(),
+  displayName: z.string(),
+  heartbeatIntervalMs: z.number().int().positive(),
+  sessionExpiresAt: z.string(),
+});
+
+export const ServerAuthFailedFrameSchema = z.object({
+  type: z.literal("device.auth.failed"),
+  code: z.string(),
+  message: z.string(),
+});
+
+export const ServerHeartbeatAckFrameSchema = z.object({
+  type: z.literal("device.heartbeat.ack"),
+  timestamp: z.number().int(),
+  sequence: z.number().int(),
+});
+
+export const ServerSessionExpiringFrameSchema = z.object({
+  type: z.literal("device.session.expiring"),
+  expiresAt: z.string(),
+});
+
+export const ServerDeviceRevokedFrameSchema = z.object({
+  type: z.literal("device.revoked"),
+  reason: z.string(),
+});
+
+export const ServerProtocolErrorFrameSchema = z.object({
+  type: z.literal("device.protocol.error"),
+  code: z.string(),
+  message: z.string(),
+});
+
+export const ServerToDeviceFrameSchema = z.discriminatedUnion("type", [
+  ServerChallengeFrameSchema,
+  ServerAuthSuccessFrameSchema,
+  ServerAuthFailedFrameSchema,
+  ServerHeartbeatAckFrameSchema,
+  ServerSessionExpiringFrameSchema,
+  ServerDeviceRevokedFrameSchema,
+  ServerProtocolErrorFrameSchema,
+]);
+
+// Bridge to Server Frames
+export const BridgeAuthProofFrameSchema = z.object({
+  type: z.literal("device.auth.proof"),
+  deviceId: z.string().uuid(),
+  challengeId: z.string().min(1),
+  signature: z.string().min(32),
+  timestamp: z.number().int(),
+  metadata: z.object({
+    platform: z.string().max(32),
+    architecture: z.string().max(32),
+    bridgeVersion: z.string().max(64),
+  }),
+});
+
+export const BridgeHeartbeatFrameSchema = z.object({
+  type: z.literal("device.heartbeat"),
+  timestamp: z.number().int(),
+  sequence: z.number().int(),
+});
+
+export const BridgeStatusFrameSchema = z.object({
+  type: z.literal("device.status"),
+  status: z.enum(["online", "idle", "busy"]),
+  uptimeSeconds: z.number().min(0),
+  memoryUsageMb: z.number().min(0),
+});
+
+export const BridgeDiagnosticsFrameSchema = z.object({
+  type: z.literal("device.diagnostics"),
+  nodeVersion: z.string(),
+  osRelease: z.string(),
+  connectionLatencyMs: z.number().optional(),
+});
+
+export const BridgeDisconnectFrameSchema = z.object({
+  type: z.literal("device.disconnect"),
+  reason: z.string().optional(),
+});
+
+export const DeviceToServerFrameSchema = z.discriminatedUnion("type", [
+  BridgeAuthProofFrameSchema,
+  BridgeHeartbeatFrameSchema,
+  BridgeStatusFrameSchema,
+  BridgeDiagnosticsFrameSchema,
+  BridgeDisconnectFrameSchema,
+]);
+
 

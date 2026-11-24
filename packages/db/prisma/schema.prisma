@@ -59,6 +59,8 @@ model User {
   configuredToolPermissions McpToolPermission[]   @relation("ConfiguredToolPermissions")
   requestedToolApprovals    ToolApproval[]        @relation("RequestedToolApprovals")
   decidedToolApprovals      ToolApproval[]        @relation("DecidedToolApprovals")
+  ownedBridgeDevices        BridgeDevice[]        @relation("DeviceOwner")
+  requestedPairingChallenges DevicePairingChallenge[] @relation("PairingRequester")
 
   @@index([externalProvider, externalId])
   @@map("users")
@@ -83,6 +85,8 @@ model Workspace {
   mcpToolPermissions  McpToolPermission[]
   toolCalls           ToolCall[]
   toolApprovals       ToolApproval[]
+  bridgeDevices       BridgeDevice[]
+  pairingChallenges   DevicePairingChallenge[]
 
   @@index([ownerId])
   @@map("workspaces")
@@ -545,4 +549,103 @@ model ToolApproval {
   @@index([workspaceId, status])
   @@index([expiresAt])
   @@map("mcp_tool_approvals")
+}
+
+// ==============================================================================
+// 9. LOCAL AGENT BRIDGE & DEVICE MANAGEMENT (PHASE 4A)
+// ==============================================================================
+
+enum DeviceStatus {
+  PENDING_APPROVAL
+  ACTIVE
+  PAUSED
+  REVOKED
+}
+
+enum PairingChallengeStatus {
+  PENDING
+  CLAIMED
+  CONSUMED
+  EXPIRED
+  REJECTED
+}
+
+model BridgeDevice {
+  id                   String                    @id @default(uuid()) @db.Uuid
+  workspaceId          String                    @map("workspace_id") @db.Uuid
+  ownerUserId          String                    @map("owner_user_id") @db.Uuid
+  displayName          String                    @map("display_name") @db.VarChar(128)
+  platform             String                    @db.VarChar(32)
+  architecture         String                    @db.VarChar(32)
+  bridgeVersion        String                    @map("bridge_version") @db.VarChar(64)
+  publicKey            String                    @map("public_key") @db.Text
+  publicKeyFingerprint String                    @map("public_key_fingerprint") @db.VarChar(128)
+  protocolVersion      String                    @default("2026-08-01") @map("protocol_version") @db.VarChar(32)
+  status               DeviceStatus              @default(PENDING_APPROVAL)
+  lastSeenAt           DateTime?                 @map("last_seen_at") @db.Timestamptz(6)
+  lastConnectedAt      DateTime?                 @map("last_connected_at") @db.Timestamptz(6)
+  pairedAt             DateTime?                 @map("paired_at") @db.Timestamptz(6)
+  revokedAt            DateTime?                 @map("revoked_at") @db.Timestamptz(6)
+  createdAt            DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace            Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUser            User                      @relation("DeviceOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  sessions             DeviceConnectionSession[]
+  pairingChallenges    DevicePairingChallenge[]
+
+  @@index([workspaceId, status])
+  @@index([publicKeyFingerprint])
+  @@index([ownerUserId])
+  @@map("bridge_devices")
+}
+
+model DevicePairingChallenge {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  challengeHash        String                 @unique @map("challenge_hash") @db.VarChar(64)
+  workspaceId          String                 @map("workspace_id") @db.Uuid
+  requestedByUserId    String                 @map("requested_by_user_id") @db.Uuid
+  claimedDeviceId      String?                @map("claimed_device_id") @db.Uuid
+  claimedDeviceName    String?                @map("claimed_device_name") @db.VarChar(128)
+  claimedPlatform      String?                @map("claimed_platform") @db.VarChar(32)
+  claimedArchitecture  String?                @map("claimed_architecture") @db.VarChar(32)
+  claimedBridgeVersion String?                @map("claimed_bridge_version") @db.VarChar(64)
+  claimedPublicKey     String?                @map("claimed_public_key") @db.Text
+  claimedFingerprint   String?                @map("claimed_fingerprint") @db.VarChar(128)
+  status               PairingChallengeStatus @default(PENDING)
+  expiresAt            DateTime               @map("expires_at") @db.Timestamptz(6)
+  consumedAt           DateTime?              @map("consumed_at") @db.Timestamptz(6)
+  failedAttempts       Int                    @default(0) @map("failed_attempts")
+  createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime               @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace            Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedByUser      User                   @relation("PairingRequester", fields: [requestedByUserId], references: [id], onDelete: Cascade)
+  claimedDevice        BridgeDevice?          @relation(fields: [claimedDeviceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([expiresAt])
+  @@map("device_pairing_challenges")
+}
+
+model DeviceConnectionSession {
+  id                   String                 @id @default(uuid()) @db.Uuid
+  deviceId             String                 @map("device_id") @db.Uuid
+  ipAddress            String?                @map("ip_address") @db.VarChar(64)
+  userAgent            String?                @map("user_agent") @db.VarChar(255)
+  connectedAt          DateTime               @default(now()) @map("connected_at") @db.Timestamptz(6)
+  lastHeartbeatAt      DateTime               @default(now()) @map("last_heartbeat_at") @db.Timestamptz(6)
+  disconnectedAt       DateTime?              @map("disconnected_at") @db.Timestamptz(6)
+  disconnectReason     String?                @map("disconnect_reason") @db.VarChar(64)
+  expiresAt            DateTime               @map("expires_at") @db.Timestamptz(6)
+  createdAt            DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  device               BridgeDevice           @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([deviceId, disconnectedAt])
+  @@index([expiresAt])
+  @@map("device_connection_sessions")
 }

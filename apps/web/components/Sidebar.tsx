@@ -28,7 +28,7 @@ const navItems = [
   { id: "chat", label: "Universal Chat", icon: MessageSquare, href: "/chat", badge: "Live" },
   { id: "integrations", label: "AI Integrations", icon: Key, href: "/settings/integrations", badge: "Phase 2A" },
   { id: "agents", label: "Agent Registry", icon: Bot, badge: "0" },
-  { id: "devices", label: "Local Bridges", icon: Laptop2, badge: "0" },
+  { id: "devices", label: "Local Bridges", icon: Laptop2, href: "/settings/devices", badge: "Phase 4A" },
   { id: "mcp", label: "MCP Tools", icon: Cpu, href: "/settings/mcp", badge: "Phase 3A" },
   { id: "workflows", label: "Workflows", icon: GitFork, badge: "Phase 6" },
   { id: "audit", label: "Audit Logs", icon: FileText },
