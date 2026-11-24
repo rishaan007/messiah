@@ -1,0 +1,37 @@
+{
+  "name": "@messiah/providers",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
+    "@google/genai": "^3.6.1",
+    "@messiah/shared": "workspace:*",
+    "openai": "^7.62.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@messiah/config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.7"
+  }
+}

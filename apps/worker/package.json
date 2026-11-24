@@ -1,0 +1,32 @@
+{
+  "name": "@messiah/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsup src/index.ts --format esm --clean",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@messiah/db": "workspace:*",
+    "@messiah/mcp": "workspace:*",
+    "@messiah/providers": "workspace:*",
+    "@messiah/shared": "workspace:*",
+    "bullmq": "^6.7.8",
+    "dotenv": "^16.4.7",
+    "ioredis": "^5.5.0"
+  },
+  "devDependencies": {
+    "@messiah/config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.21.0",
+    "tsup": "^8.4.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}

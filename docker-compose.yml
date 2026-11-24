@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: messiah-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-messiah_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-messiah_dev_secure_password_replace_in_prod}
+      POSTGRES_DB: ${POSTGRES_DB:-messiah_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - messiah_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-messiah_admin} -d ${POSTGRES_DB:-messiah_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - messiah-network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: messiah-redis
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-messiah_redis_dev_password}", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - messiah_redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-messiah_redis_dev_password}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - messiah-network
+
+volumes:
+  messiah_pgdata:
+    name: messiah_postgres_data
+  messiah_redisdata:
+    name: messiah_redis_data
+
+networks:
+  messiah-network:
+    name: messiah_network
+    driver: bridge

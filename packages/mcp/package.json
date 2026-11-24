@@ -1,0 +1,40 @@
+{
+  "name": "@messiah/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@messiah/shared": "workspace:*",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/core": "^2.4.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "eventsource": "^3.0.2",
+    "undici": "^8.13.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@messiah/config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "tsup": "^8.5.1",
+    "typescript": "^5.8.2",
+    "vitest": "^3.2.7"
+  }
+}

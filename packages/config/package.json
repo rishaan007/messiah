@@ -1,0 +1,10 @@
+{
+  "name": "@messiah/config",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/index.js",
+  "files": [
+    "tsconfig.base.json",
+    "eslint-preset.js"
+  ]
+}

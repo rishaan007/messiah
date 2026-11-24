@@ -1,0 +1,35 @@
+{
+  "name": "messiah",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MESSIAH — The Universal AI Agent Workspace",
+  "author": "Messiah Team",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@12.21.0",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f",
+    "db:generate": "pnpm --filter @messiah/db generate",
+    "db:push": "pnpm --filter @messiah/db push",
+    "db:migrate": "pnpm --filter @messiah/db migrate"
+  },
+  "devDependencies": {
+    "eslint": "^9.21.0",
+    "prettier": "^3.5.3",
+    "turbo": "^2.4.4",
+    "typescript": "^5.8.2",
+    "typescript-eslint": "^8.24.0"
+  }
+}

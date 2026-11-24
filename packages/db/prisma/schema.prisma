@@ -1,0 +1,548 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum ProviderStatus {
+  ACTIVE
+  INVALID
+  ERROR
+}
+
+model SystemConfig {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique @db.VarChar(128)
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("system_configs")
+}
+
+model HealthCheckLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  status    String   @db.VarChar(32)
+  details   String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("health_check_logs")
+}
+
+model User {
+  id                        String                @id @default(uuid()) @db.Uuid
+  externalProvider          String                @default("supabase") @map("external_provider") @db.VarChar(32)
+  externalId                String                @unique @map("external_id") @db.VarChar(128)
+  email                     String                @unique @db.VarChar(255)
+  fullName                  String?               @map("full_name") @db.VarChar(128)
+  avatarUrl                 String?               @map("avatar_url") @db.Text
+  createdAt                 DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  memberships               WorkspaceMember[]
+  ownedWorkspaces           Workspace[]           @relation("WorkspaceOwner")
+  createdConnections        ProviderConnection[]  @relation("CreatedConnections")
+  auditLogs                 AuditLog[]            @relation("AuditActor")
+  createdThreads            Thread[]              @relation("CreatedThreads")
+  idempotencyKeys           IdempotencyKey[]
+  createdMcpConnections     McpServerConnection[] @relation("CreatedMcpConnections")
+  configuredToolPermissions McpToolPermission[]   @relation("ConfiguredToolPermissions")
+  requestedToolApprovals    ToolApproval[]        @relation("RequestedToolApprovals")
+  decidedToolApprovals      ToolApproval[]        @relation("DecidedToolApprovals")
+
+  @@index([externalProvider, externalId])
+  @@map("users")
+}
+
+model Workspace {
+  id                  String                @id @default(uuid()) @db.Uuid
+  name                String                @db.VarChar(64)
+  slug                String                @unique @db.VarChar(64)
+  ownerId             String                @map("owner_id") @db.Uuid
+  createdAt           DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  owner               User                  @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members             WorkspaceMember[]
+  providerConnections ProviderConnection[]
+  auditLogs           AuditLog[]
+  threads             Thread[]
+  idempotencyKeys     IdempotencyKey[]
+  mcpConnections      McpServerConnection[]
+  mcpToolPermissions  McpToolPermission[]
+  toolCalls           ToolCall[]
+  toolApprovals       ToolApproval[]
+
+  @@index([ownerId])
+  @@map("workspaces")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid()) @db.Uuid
+  workspaceId String        @map("workspace_id") @db.Uuid
+  userId      String        @map("user_id") @db.Uuid
+  role        WorkspaceRole @default(MEMBER)
+  joinedAt    DateTime      @default(now()) @map("joined_at") @db.Timestamptz(6)
+  updatedAt   DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model ProviderConnection {
+  id              String               @id @default(uuid()) @db.Uuid
+  workspaceId     String               @map("workspace_id") @db.Uuid
+  provider        String               @db.VarChar(64)
+  displayName     String               @map("display_name") @db.VarChar(128)
+  status          ProviderStatus       @default(ACTIVE)
+  capabilities    Json                 @default("{}") @db.JsonB
+  createdByUserId String?              @map("created_by_user_id") @db.Uuid
+  lastValidatedAt DateTime?            @map("last_validated_at") @db.Timestamptz(6)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser   User?                @relation("CreatedConnections", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  credential      EncryptedCredential?
+  threads         Thread[]
+  messages        Message[]
+  generationRuns  GenerationRun[]
+
+  @@unique([workspaceId, provider, displayName])
+  @@index([workspaceId])
+  @@index([provider])
+  @@map("provider_connections")
+}
+
+model EncryptedCredential {
+  id                   String             @id @default(uuid()) @db.Uuid
+  providerConnectionId String             @unique @map("provider_connection_id") @db.Uuid
+  ciphertext           String             @db.Text
+  initializationVector String             @map("initialization_vector") @db.VarChar(64)
+  authenticationTag    String             @map("authentication_tag") @db.VarChar(64)
+  keyVersion           String             @default("v1") @map("key_version") @db.VarChar(32)
+  createdAt            DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  connection           ProviderConnection @relation(fields: [providerConnectionId], references: [id], onDelete: Cascade)
+
+  @@index([providerConnectionId])
+  @@map("encrypted_credentials")
+}
+
+model AuditLog {
+  id           String    @id @default(uuid()) @db.Uuid
+  workspaceId  String    @map("workspace_id") @db.Uuid
+  actorId      String?   @map("actor_id") @db.Uuid
+  action       String    @db.VarChar(64)
+  resourceType String    @map("resource_type") @db.VarChar(64)
+  resourceId   String?   @map("resource_id") @db.VarChar(64)
+  details      Json      @default("{}") @db.JsonB
+  ipAddress    String?   @map("ip_address") @db.VarChar(45)
+  userAgent    String?   @map("user_agent") @db.Text
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actor        User?     @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+enum MessageStatus {
+  PENDING
+  STREAMING
+  COMPLETED
+  FAILED
+  CANCELLED
+  INTERRUPTED
+}
+
+enum RunStatus {
+  PENDING
+  STREAMING
+  AWAITING_APPROVAL
+  COMPLETED
+  FAILED
+  CANCELLED
+  INTERRUPTED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+enum ToolCallStatus {
+  PROPOSED
+  AWAITING_APPROVAL
+  APPROVED
+  EXECUTING
+  SUCCEEDED
+  FAILED
+  DENIED
+  CANCELLED
+  EXPIRED
+  UNKNOWN_OUTCOME
+}
+
+enum ToolApprovalStatus {
+  PENDING
+  APPROVED
+  DENIED
+  EXPIRED
+}
+
+model Thread {
+  id                            String              @id @default(uuid()) @db.Uuid
+  workspaceId                   String              @map("workspace_id") @db.Uuid
+  createdByUserId               String              @map("created_by_user_id") @db.Uuid
+  title                         String              @default("New Conversation") @db.VarChar(255)
+  preferredProviderConnectionId String?             @map("preferred_provider_connection_id") @db.Uuid
+  preferredModelId              String?             @map("preferred_model_id") @db.VarChar(128)
+  lastMessageAt                 DateTime            @default(now()) @map("last_message_at") @db.Timestamptz(6)
+  archivedAt                    DateTime?           @map("archived_at") @db.Timestamptz(6)
+  createdAt                     DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace                     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser                 User                @relation("CreatedThreads", fields: [createdByUserId], references: [id], onDelete: Cascade)
+  preferredProviderConnection   ProviderConnection? @relation(fields: [preferredProviderConnectionId], references: [id], onDelete: SetNull)
+  messages                      Message[]
+  generationRuns                GenerationRun[]
+  idempotencyKeys               IdempotencyKey[]
+  toolCalls                     ToolCall[]
+
+  @@index([workspaceId, archivedAt, lastMessageAt(sort: Desc)])
+  @@index([workspaceId])
+  @@index([createdByUserId])
+  @@map("threads")
+}
+
+model Message {
+  id                   String              @id @default(uuid()) @db.Uuid
+  threadId             String              @map("thread_id") @db.Uuid
+  sequence             Int
+  role                 MessageRole
+  content              String              @db.Text
+  status               MessageStatus       @default(COMPLETED)
+  providerConnectionId String?             @map("provider_connection_id") @db.Uuid
+  modelId              String?             @map("model_id") @db.VarChar(128)
+  completedAt          DateTime?           @map("completed_at") @db.Timestamptz(6)
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  thread               Thread              @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  providerConnection   ProviderConnection? @relation(fields: [providerConnectionId], references: [id], onDelete: SetNull)
+  generationRuns       GenerationRun[]     @relation("AssistantMessage")
+
+  @@unique([threadId, sequence])
+  @@index([threadId, sequence(sort: Asc)])
+  @@index([threadId, createdAt])
+  @@map("messages")
+}
+
+model GenerationRun {
+  id                      String              @id @default(uuid()) @db.Uuid
+  threadId                String              @map("thread_id") @db.Uuid
+  assistantMessageId      String              @map("assistant_message_id") @db.Uuid
+  providerConnectionId    String              @map("provider_connection_id") @db.Uuid
+  provider                String              @db.VarChar(64)
+  modelId                 String              @map("model_id") @db.VarChar(128)
+  status                  RunStatus           @default(PENDING)
+  idempotencyKey          String?             @map("idempotency_key") @db.VarChar(128)
+  requestFingerprint      String?             @map("request_fingerprint") @db.VarChar(64)
+  startedAt               DateTime?           @map("started_at") @db.Timestamptz(6)
+  completedAt             DateTime?           @map("completed_at") @db.Timestamptz(6)
+  inputTokens             Int                 @default(0) @map("input_tokens")
+  outputTokens            Int                 @default(0) @map("output_tokens")
+  cachedInputTokens       Int                 @default(0) @map("cached_input_tokens")
+  providerResponseId      String?             @map("provider_response_id") @db.VarChar(255)
+  safeErrorCode           String?             @map("safe_error_code") @db.VarChar(64)
+  cancellationRequestedAt DateTime?           @map("cancellation_requested_at") @db.Timestamptz(6)
+  createdAt               DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  thread                  Thread              @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  assistantMessage        Message             @relation("AssistantMessage", fields: [assistantMessageId], references: [id], onDelete: Cascade)
+  providerConnection      ProviderConnection  @relation(fields: [providerConnectionId], references: [id], onDelete: Restrict)
+  idempotencyKeyRecord    IdempotencyKey?
+  toolCalls               ToolCall[]
+
+  @@index([threadId, status])
+  @@index([threadId, createdAt(sort: Desc)])
+  @@index([idempotencyKey])
+  @@map("generation_runs")
+}
+
+model IdempotencyKey {
+  id                 String         @id @default(uuid()) @db.Uuid
+  workspaceId        String         @map("workspace_id") @db.Uuid
+  userId             String         @map("user_id") @db.Uuid
+  threadId           String         @map("thread_id") @db.Uuid
+  key                String         @db.VarChar(128)
+  requestFingerprint String         @map("request_fingerprint") @db.VarChar(64)
+  generationRunId    String?        @unique @map("generation_run_id") @db.Uuid
+  userMessageId      String?        @map("user_message_id") @db.Uuid
+  assistantMessageId String?        @map("assistant_message_id") @db.Uuid
+  lockedAt           DateTime       @default(now()) @map("locked_at") @db.Timestamptz(6)
+  expiresAt          DateTime       @map("expires_at") @db.Timestamptz(6)
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace          Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user               User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  thread             Thread         @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  generationRun      GenerationRun? @relation(fields: [generationRunId], references: [id], onDelete: SetNull)
+
+  @@unique([threadId, key])
+  @@index([workspaceId])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+model OutboxEvent {
+  id            String       @id @default(uuid()) @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(64)
+  aggregateType String       @map("aggregate_type") @db.VarChar(64)
+  aggregateId   String       @map("aggregate_id") @db.Uuid
+  payload       Json         @db.JsonB
+  status        OutboxStatus @default(PENDING)
+  retryCount    Int          @default(0) @map("retry_count")
+  errorDetails  String?      @map("error_details") @db.Text
+  processedAt   DateTime?    @map("processed_at") @db.Timestamptz(6)
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@index([status, createdAt])
+  @@index([aggregateId])
+  @@map("outbox_events")
+}
+
+enum McpTransportType {
+  STREAMABLE_HTTP
+  SSE
+}
+
+enum McpConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  CONNECTING
+  ERROR
+}
+
+enum McpAuthType {
+  NONE
+  BEARER
+  OAUTH
+}
+
+enum McpAuthStatus {
+  NONE
+  CONFIGURED
+  AUTHENTICATED
+  EXPIRED
+  FAILED
+}
+
+enum McpPermissionMode {
+  DISABLED
+  READ_ONLY
+  REQUIRE_APPROVAL
+  EXPLICITLY_AUTHORIZED
+}
+
+model McpServerConnection {
+  id                   String               @id @default(uuid()) @db.Uuid
+  workspaceId          String               @map("workspace_id") @db.Uuid
+  name                 String               @db.VarChar(128)
+  endpointUrl          String               @map("endpoint_url") @db.Text
+  transportType        McpTransportType     @default(STREAMABLE_HTTP) @map("transport_type")
+  status               McpConnectionStatus  @default(DISCONNECTED)
+  protocolVersion      String?              @map("protocol_version") @db.VarChar(64)
+  serverName           String?              @map("server_name") @db.VarChar(128)
+  serverVersion        String?              @map("server_version") @db.VarChar(64)
+  serverCapabilities   Json                 @default("{}") @map("server_capabilities") @db.JsonB
+  authenticationStatus McpAuthStatus        @default(NONE) @map("authentication_status")
+  lastConnectedAt      DateTime?            @map("last_connected_at") @db.Timestamptz(6)
+  lastValidatedAt      DateTime?            @map("last_validated_at") @db.Timestamptz(6)
+  lastErrorCode        String?              @map("last_error_code") @db.VarChar(64)
+  createdByUserId      String?              @map("created_by_user_id") @db.Uuid
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace            Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser        User?                @relation("CreatedMcpConnections", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  credential           McpCredential?
+  tools                McpToolDefinition[]
+  toolCalls            ToolCall[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, name])
+  @@map("mcp_server_connections")
+}
+
+model McpCredential {
+  id                   String               @id @default(uuid()) @db.Uuid
+  connectionId         String               @unique @map("connection_id") @db.Uuid
+  authType             McpAuthType          @default(NONE) @map("auth_type")
+  encryptedAccessToken String?              @map("encrypted_access_token") @db.Text
+  encryptedRefreshToken String?             @map("encrypted_refresh_token") @db.Text
+  tokenIssuer          String?              @map("token_issuer") @db.VarChar(255)
+  grantedScopes        String[]             @default([]) @map("granted_scopes")
+  encryptionKeyVersion String               @default("v2") @map("encryption_key_version") @db.VarChar(16)
+  tokenExpiresAt       DateTime?            @map("token_expires_at") @db.Timestamptz(6)
+  clientInformation    Json?                @map("client_information") @db.JsonB
+  createdAt            DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  connection           McpServerConnection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@map("mcp_credentials")
+}
+
+model McpToolDefinition {
+  id              String               @id @default(uuid()) @db.Uuid
+  connectionId    String               @map("connection_id") @db.Uuid
+  toolName        String               @map("tool_name") @db.VarChar(128)
+  displayName     String?              @map("display_name") @db.VarChar(255)
+  description     String?              @db.Text
+  inputSchema     Json                 @map("input_schema") @db.JsonB
+  outputSchema    Json?                @map("output_schema") @db.JsonB
+  annotations     Json?                @db.JsonB
+  cacheMetadata   Json?                @map("cache_metadata") @db.JsonB
+  discoveredAt    DateTime             @default(now()) @map("discovered_at") @db.Timestamptz(6)
+  schemaHash      String               @map("schema_hash") @db.VarChar(64)
+  isAvailable     Boolean              @default(true) @map("is_available")
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  connection      McpServerConnection  @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  permission      McpToolPermission?
+  toolCalls       ToolCall[]
+
+  @@unique([connectionId, toolName])
+  @@index([connectionId, isAvailable])
+  @@map("mcp_tool_definitions")
+}
+
+model McpToolPermission {
+  id                 String               @id @default(uuid()) @db.Uuid
+  workspaceId        String               @map("workspace_id") @db.Uuid
+  toolDefinitionId   String               @unique @map("tool_definition_id") @db.Uuid
+  permissionMode     McpPermissionMode    @default(REQUIRE_APPROVAL) @map("permission_mode")
+  requiresApproval   Boolean              @default(true) @map("requires_approval")
+  configuredByUserId String?              @map("configured_by_user_id") @db.Uuid
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace          Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  toolDefinition     McpToolDefinition    @relation(fields: [toolDefinitionId], references: [id], onDelete: Cascade)
+  configuredByUser   User?                @relation("ConfiguredToolPermissions", fields: [configuredByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, permissionMode])
+  @@map("mcp_tool_permissions")
+}
+
+model ToolCall {
+  id                 String              @id @default(uuid()) @db.Uuid
+  generationRunId    String              @map("generation_run_id") @db.Uuid
+  threadId           String              @map("thread_id") @db.Uuid
+  workspaceId        String              @map("workspace_id") @db.Uuid
+  toolDefinitionId   String              @map("tool_definition_id") @db.Uuid
+  providerCallId     String              @map("provider_call_id") @db.VarChar(128)
+  providerToolAlias  String              @map("provider_tool_alias") @db.VarChar(128)
+  connectionId       String              @map("connection_id") @db.Uuid
+  toolName           String              @map("tool_name") @db.VarChar(128)
+  schemaHash         String              @map("schema_hash") @db.VarChar(64)
+  argumentsHash      String              @map("arguments_hash") @db.VarChar(64)
+  encryptedArguments String?             @map("encrypted_arguments") @db.Text
+  argumentsPreview   Json                @default("{}") @map("arguments_preview") @db.JsonB
+  status             ToolCallStatus      @default(PROPOSED)
+  result             Json?               @db.JsonB
+  isError            Boolean             @default(false) @map("is_error")
+  errorMessage       String?             @map("error_message") @db.Text
+  durationMs         Int?                @map("duration_ms")
+  completedAt        DateTime?           @map("completed_at") @db.Timestamptz(6)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  generationRun      GenerationRun       @relation(fields: [generationRunId], references: [id], onDelete: Cascade)
+  thread             Thread              @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  toolDefinition     McpToolDefinition   @relation(fields: [toolDefinitionId], references: [id], onDelete: Cascade)
+  connection         McpServerConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  approval           ToolApproval?
+
+  @@index([generationRunId])
+  @@index([threadId])
+  @@index([workspaceId, status])
+  @@index([toolDefinitionId])
+  @@index([connectionId])
+  @@map("mcp_tool_calls")
+}
+
+model ToolApproval {
+  id                String             @id @default(uuid()) @db.Uuid
+  toolCallId        String             @unique @map("tool_call_id") @db.Uuid
+  workspaceId       String             @map("workspace_id") @db.Uuid
+  requestedByUserId String?            @map("requested_by_user_id") @db.Uuid
+  decidedByUserId   String?            @map("decided_by_user_id") @db.Uuid
+  status            ToolApprovalStatus @default(PENDING)
+  argumentsHash     String             @map("arguments_hash") @db.VarChar(64)
+  schemaHash        String             @map("schema_hash") @db.VarChar(64)
+  expiresAt         DateTime           @map("expires_at") @db.Timestamptz(6)
+  decidedAt         DateTime?          @map("decided_at") @db.Timestamptz(6)
+  rejectionReason   String?            @map("rejection_reason") @db.Text
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  toolCall          ToolCall           @relation(fields: [toolCallId], references: [id], onDelete: Cascade)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedByUser   User?              @relation("RequestedToolApprovals", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  decidedByUser     User?              @relation("DecidedToolApprovals", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([expiresAt])
+  @@map("mcp_tool_approvals")
+}
