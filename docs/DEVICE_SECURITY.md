@@ -21,8 +21,10 @@ A foundational security requirement for enterprise and workstation deployment is
    - Ed25519 keypairs are generated directly on the target host using cryptographically secure PRNG.
    - Private keys are never transmitted over the network under any circumstance—not during pairing, handshake, diagnostics, or synchronization.
 2. **Keystore Protection**:
-   - **macOS**: Stored in the encrypted macOS Keychain (`com.messiah.bridge`).
-   - **Linux & Windows**: Stored in an AES-256-GCM encrypted file vault (`~/.messiah/bridge/device.vault`) using PBKDF2 key derivation with 100,000 iterations and POSIX `0600` permissions.
+   - **macOS**: Stored in the encrypted macOS Keychain (`com.messiah.bridge`) via `KeychainStore`.
+   - **Windows**: Protected via Windows DPAPI and strict user-only ACLs (`WindowsCredentialStore`).
+   - **Linux**: Protected via Linux Secret Service / `secret-tool` (`LinuxSecretServiceStore`); fails closed on headless sessions unless a user passphrase is supplied for the local encrypted vault.
+   - **Software Vault Fallback (v2)**: Stored in an AES-256-GCM encrypted file vault (`~/.messiah/bridge/device.vault`) with AAD `MESSIAH_DEVICE_KEYSTORE_V2`, 32-byte salt, **600,000 iterations PBKDF2-HMAC-SHA512**, and POSIX `0600` permissions (with automatic backwards-compatible v1 migration).
 3. **Public Key SPKI Fingerprint**:
    - The cloud database only stores the SPKI PEM public key and its SHA-256 binary DER hash.
    - A compromise of the cloud database cannot expose private keys or compromise workstation integrity.
@@ -48,15 +50,10 @@ Messiah enforces strict workspace-level isolation for all device operations:
 
 ---
 
-## 5. Strict Phase 4A Boundary Enforcement
+## 5. Phase 4B Workstation Sandboxing & Execution Boundaries
 
-Phase 4A is strictly dedicated to **Bridge Foundation & Secure Device Connectivity**. 
-
-To maintain security and integrity, the following boundaries are strictly enforced:
-- **NO Command Execution**: No shell, subprocess, exec, or bash execution endpoints exist.
-- **NO Filesystem Manipulation**: No reading, writing, or listing of local workstation files.
-- **NO Child Process Spawning**: No local stdio MCP server spawning or process management.
-- **NO Remote Desktop / Screen Inspection**: No screen capture, virtual keyboard, or mouse injection.
-- **NO Browser Automation**: No local Chromium / Playwright driver processes.
-
-These capabilities are reserved for future phases (Phase 4B+) and will be governed by explicit user approval cards, execution sandboxes, and granular workspace permission policies.
+Phase 4B introduces bounded local execution strictly governed by layered OS and cryptographic protections:
+- **Zero Shell Interpolation**: All process execution uses argument arrays (`shell: false`). Arbitrary raw shell injection is structurally impossible.
+- **Canonical Path Containment (`PathGuard`)**: Filesystem reads, searches, creations, edits, and deletions are restricted to administrator-approved project roots after resolving symlinks (`realpathSync`), blocking null bytes, and excluding `.ssh`, `.aws`, `.gcp`, `.env`, and keychains.
+- **Signed Task Envelopes**: Workstations reject any task without a valid server signature (`MESSIAH_TASK_AUTH:...`), unexpired TTL, and unused 256-bit nonce (`ReplayGuard`).
+- **Human-in-the-Loop Approvals**: Sensitive mutations and terminal operations require explicit approval (`BridgeTaskApproval`) from authorized `OWNER` or `ADMIN` workspace members.

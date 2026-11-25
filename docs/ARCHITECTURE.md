@@ -621,6 +621,24 @@ Phase 3B.1 hardens the multi-turn agent engine against distributed race conditio
    - External data disclosure warning identifying external MCP host and AI provider recipients.
    - Cross-device concurrent decision rejection banner (`ALREADY_DECIDED`).
 
+## 16. Local Agent Execution, Workstation Sandboxing & Cross-Device Control (Phase 4B)
+
+Phase 4B connects Messiah's Local Agent Bridge (`apps/bridge-daemon`) to genuine workstation execution capabilities governed by cryptographic task signing and OS containment (detailed in [`docs/LOCAL_EXECUTION_ENGINE.md`](file:///Users/rishaankumar/Desktop/messiah/docs/LOCAL_EXECUTION_ENGINE.md)):
+
+1. **Signed Task Authorization (`TaskAuthorizationService`)**:
+   - Server generates HMAC-SHA256 signed envelopes over canonical payload `MESSIAH_TASK_AUTH:...` with 256-bit `nonce`, `argumentsHash`, `resourceScopes`, and TTL.
+   - Local daemon validates signature, TTL, and unused nonce via `ReplayGuard` before touching any capability.
+2. **Workstation Capability Broker (13 Capabilities)**:
+   - Granular capability dispatch covering filesystem (`list`, `read`, `search`, `create`, `modify`, `delete`), local stdio MCP (`discover`, `invoke`), sandboxed process execution (`run`, `inspect`), and workstation subagents (`start`, `status`, `cancel`).
+3. **Canonical Path Containment (`PathGuard`)**:
+   - Realpath canonical resolution (`realpathSync`) preventing symlink escapes and `../` traversal outside approved project roots, plus sensitive credential path exclusions (`.ssh`, `.aws`, `.gcp`, `.env`, keychains).
+   - Optimistic concurrency control (`expectedPreviousSha256`) on atomic file writes.
+4. **Workstation Process Sandboxing (`ProcessSandbox`)**:
+   - Zero shell interpolation (`shell: false` with strict argument arrays), stripped sensitive host env variables, enforced memory/process ceilings, 1MB output truncation, and `SIGKILL` process-tree cleanup on timeout/cancel.
+5. **Cross-Device Control & Review (`apps/web`)**:
+   - Real-time capability and policy configurator at `/settings/devices/[deviceId]/capabilities`.
+   - Execution target selector in `ChatWorkspace` enabling users on phones/tablets/other browsers to direct tasks to paired online workstations with live `stdout`/`stderr` streaming and single-use human approval governance.
+
 ---
 
 _End of Document: Messiah System Architecture Specification._

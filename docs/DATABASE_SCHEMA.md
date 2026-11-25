@@ -1112,6 +1112,94 @@ CREATE INDEX "device_pairing_challenges_hash_idx" ON "device_pairing_challenges"
 CREATE INDEX "device_pairing_challenges_expires_at_idx" ON "device_pairing_challenges"("expires_at");
 CREATE INDEX "device_connection_sessions_device_id_idx" ON "device_connection_sessions"("device_id");
 CREATE INDEX "device_connection_sessions_workspace_id_idx" ON "device_connection_sessions"("workspace_id");
+
+-- ============================================================================
+-- 11. WORKSTATION CAPABILITIES, LOCAL MCP & BRIDGE TASKS (PHASE 4B)
+-- ============================================================================
+
+CREATE TYPE "LocalMcpServerStatus" AS ENUM ('ACTIVE', 'DISABLED', 'CRASHED');
+CREATE TYPE "BridgeTaskStatus" AS ENUM (
+    'QUEUED', 'AWAITING_APPROVAL', 'DISPATCHED', 'ACCEPTED', 'RUNNING',
+    'SUCCEEDED', 'FAILED', 'CANCEL_REQUESTED', 'CANCELLED',
+    'UNKNOWN_OUTCOME', 'DEVICE_OFFLINE', 'EXPIRED'
+);
+
+-- Extended BridgeDevice columns: allowed_roots, capabilities, device_policy
+
+CREATE TABLE "bridge_local_mcp_servers" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "device_id" UUID NOT NULL REFERENCES "bridge_devices"("id") ON DELETE CASCADE,
+    "workspace_id" UUID NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+    "server_name" VARCHAR(128) NOT NULL,
+    "command" VARCHAR(255) NOT NULL,
+    "args" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "cwd" TEXT,
+    "env" JSONB,
+    "status" "LocalMcpServerStatus" NOT NULL DEFAULT 'ACTIVE',
+    "schema_hash" VARCHAR(64),
+    "tools" JSONB,
+    "last_discovered_at" TIMESTAMPTZ(6),
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(6) NOT NULL,
+    PRIMARY KEY ("id"),
+    CONSTRAINT "bridge_local_mcp_servers_device_id_server_name_key" UNIQUE ("device_id", "server_name")
+);
+
+CREATE TABLE "bridge_tasks" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "workspace_id" UUID NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+    "device_id" UUID NOT NULL REFERENCES "bridge_devices"("id") ON DELETE CASCADE,
+    "user_id" UUID NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+    "thread_id" UUID,
+    "generation_run_id" UUID,
+    "capability" VARCHAR(64) NOT NULL,
+    "resource_scopes" TEXT[] DEFAULT ARRAY[]::TEXT[],
+    "parameters" JSONB NOT NULL DEFAULT '{}',
+    "arguments_hash" VARCHAR(64) NOT NULL,
+    "status" "BridgeTaskStatus" NOT NULL DEFAULT 'QUEUED',
+    "result" JSONB,
+    "error_message" TEXT,
+    "exit_code" INTEGER,
+    "duration_ms" INTEGER,
+    "issued_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expires_at" TIMESTAMPTZ(6) NOT NULL,
+    "started_at" TIMESTAMPTZ(6),
+    "completed_at" TIMESTAMPTZ(6),
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(6) NOT NULL,
+    PRIMARY KEY ("id")
+);
+
+CREATE TABLE "bridge_task_approvals" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "task_id" UUID NOT NULL UNIQUE REFERENCES "bridge_tasks"("id") ON DELETE CASCADE,
+    "workspace_id" UUID NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+    "device_id" UUID NOT NULL REFERENCES "bridge_devices"("id") ON DELETE CASCADE,
+    "requested_by_user_id" UUID REFERENCES "users"("id") ON DELETE SET NULL,
+    "decided_by_user_id" UUID REFERENCES "users"("id") ON DELETE SET NULL,
+    "status" "ToolApprovalStatus" NOT NULL DEFAULT 'PENDING',
+    "operation" VARCHAR(128) NOT NULL,
+    "summary" TEXT NOT NULL,
+    "details" JSONB NOT NULL DEFAULT '{}',
+    "arguments_hash" VARCHAR(64) NOT NULL,
+    "nonce" VARCHAR(64) NOT NULL,
+    "expires_at" TIMESTAMPTZ(6) NOT NULL,
+    "decided_at" TIMESTAMPTZ(6),
+    "rejection_reason" TEXT,
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMPTZ(6) NOT NULL,
+    PRIMARY KEY ("id")
+);
+
+CREATE TABLE "bridge_task_logs" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "task_id" UUID NOT NULL REFERENCES "bridge_tasks"("id") ON DELETE CASCADE,
+    "sequence" INTEGER NOT NULL,
+    "stream" VARCHAR(16) NOT NULL,
+    "chunk" TEXT NOT NULL,
+    "timestamp" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY ("id")
+);
 ```
 
 ---

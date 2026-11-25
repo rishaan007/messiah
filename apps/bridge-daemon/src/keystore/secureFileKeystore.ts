@@ -16,11 +16,20 @@ export class SecureFileKeystore implements IKeyStore {
   }
 
   /**
-   * Derives a machine-unique 256-bit encryption key using PBKDF2.
-   * This ties the encrypted vault to the current host machine and user account.
+   * Derives a machine/user-unique 256-bit encryption key using PBKDF2-HMAC-SHA512.
+   * Hardened to 600,000 iterations in accordance with OWASP Password Storage Guidelines.
+   * Combines user-specified passphrase (if set via MESSIAH_VAULT_PASSPHRASE), user UID/SID,
+   * host-specific entropy, and a high-entropy 32-byte cryptographically random salt.
+   *
+   * SECURITY WARNING: Software-based file encryption protects credentials at rest against offline
+   * disk theft, but cannot defend against malicious code running under the same OS user account
+   * with memory-inspection or process-injection capabilities.
    */
-  private deriveKey(salt: Buffer): Buffer {
+  private deriveKey(salt: Buffer, iterations = 600_000, digest = "sha512"): Buffer {
+    const userPassphrase = process.env.MESSIAH_VAULT_PASSPHRASE || "";
     const machineEntropy = [
+      userPassphrase,
+      os.userInfo().username,
       os.hostname(),
       os.homedir(),
       os.platform(),
@@ -31,9 +40,9 @@ export class SecureFileKeystore implements IKeyStore {
     return crypto.pbkdf2Sync(
       machineEntropy,
       salt,
-      100_000,
+      iterations,
       32,
-      "sha256"
+      digest
     );
   }
 
@@ -53,11 +62,31 @@ export class SecureFileKeystore implements IKeyStore {
       const salt = Buffer.from(envelope.salt, "hex");
       const iv = Buffer.from(envelope.iv, "hex");
       const tag = Buffer.from(envelope.tag, "hex");
-      const key = this.deriveKey(salt);
+      const version = envelope.version || 1;
+
+      // Backward compatibility for existing v1 envelopes (100,000 iterations sha256)
+      const iterations = envelope.iterations || (version === 1 ? 100_000 : 600_000);
+      const digest = envelope.digest || (version === 1 ? "sha256" : "sha512");
+      const aad = version === 1 ? "MESSIAH_DEVICE_KEYSTORE_V1" : "MESSIAH_DEVICE_KEYSTORE_V2";
+
+      // In v1, deriveKey did not include os.userInfo().username or passphrase
+      let key: Buffer;
+      if (version === 1 && !envelope.iterations) {
+        const legacyMachineEntropy = [
+          os.hostname(),
+          os.homedir(),
+          os.platform(),
+          os.arch(),
+          os.cpus()[0]?.model || "cpu-generic",
+        ].join(":");
+        key = crypto.pbkdf2Sync(legacyMachineEntropy, salt, 100_000, 32, "sha256");
+      } else {
+        key = this.deriveKey(salt, iterations, digest);
+      }
 
       const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
       decipher.setAuthTag(tag);
-      decipher.setAAD(Buffer.from("MESSIAH_DEVICE_KEYSTORE_V1", "utf-8"));
+      decipher.setAAD(Buffer.from(aad, "utf-8"));
 
       let decrypted = decipher.update(envelope.ciphertext, "hex", "utf-8");
       decrypted += decipher.final("utf-8");
@@ -74,12 +103,14 @@ export class SecureFileKeystore implements IKeyStore {
       fs.mkdirSync(this.storageDir, { recursive: true, mode: 0o700 });
     }
 
-    const salt = crypto.randomBytes(16);
+    const salt = crypto.randomBytes(32); // 32-byte cryptographic salt
     const iv = crypto.randomBytes(12);
-    const key = this.deriveKey(salt);
+    const iterations = 600_000; // OWASP recommendation for PBKDF2-HMAC-SHA512
+    const digest = "sha512";
+    const key = this.deriveKey(salt, iterations, digest);
 
     const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
-    cipher.setAAD(Buffer.from("MESSIAH_DEVICE_KEYSTORE_V1", "utf-8"));
+    cipher.setAAD(Buffer.from("MESSIAH_DEVICE_KEYSTORE_V2", "utf-8"));
 
     const plaintext = JSON.stringify(identity);
     let ciphertext = cipher.update(plaintext, "utf-8", "hex");
@@ -87,7 +118,10 @@ export class SecureFileKeystore implements IKeyStore {
     const tag = cipher.getAuthTag();
 
     const envelope = {
-      version: 1,
+      version: 2,
+      kdf: "PBKDF2-HMAC-SHA512",
+      iterations,
+      digest,
       salt: salt.toString("hex"),
       iv: iv.toString("hex"),
       tag: tag.toString("hex"),

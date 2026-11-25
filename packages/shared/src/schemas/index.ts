@@ -302,6 +302,36 @@ export const ServerProtocolErrorFrameSchema = z.object({
   message: z.string(),
 });
 
+// Phase 4B: Signed Task Dispatch Frame Schema
+export const DeviceTaskDispatchFrameSchema = z.object({
+  type: z.literal("device.task.dispatch"),
+  taskId: z.string().uuid(),
+  requestId: z.string().min(1),
+  deviceId: z.string().uuid(),
+  workspaceId: z.string().uuid(),
+  capability: z.string().min(1),
+  resourceScopes: z.array(z.string()),
+  parameters: z.record(z.unknown()),
+  argumentsHash: z.string().min(32),
+  issuedAt: z.number().int(),
+  expiresAt: z.number().int(),
+  nonce: z.string().min(16),
+  policyVersion: z.string(),
+  approvalReference: z.string().optional(),
+  serverSignature: z.string().min(32),
+});
+
+export const DeviceTaskCancelFrameSchema = z.object({
+  type: z.literal("device.task.cancel"),
+  taskId: z.string().uuid(),
+  reason: z.string(),
+});
+
+export const DeviceMcpSyncFrameSchema = z.object({
+  type: z.literal("device.mcp.sync"),
+  requestId: z.string().min(1),
+});
+
 export const ServerToDeviceFrameSchema = z.discriminatedUnion("type", [
   ServerChallengeFrameSchema,
   ServerAuthSuccessFrameSchema,
@@ -310,6 +340,9 @@ export const ServerToDeviceFrameSchema = z.discriminatedUnion("type", [
   ServerSessionExpiringFrameSchema,
   ServerDeviceRevokedFrameSchema,
   ServerProtocolErrorFrameSchema,
+  DeviceTaskDispatchFrameSchema,
+  DeviceTaskCancelFrameSchema,
+  DeviceMcpSyncFrameSchema,
 ]);
 
 // Bridge to Server Frames
@@ -351,12 +384,169 @@ export const BridgeDisconnectFrameSchema = z.object({
   reason: z.string().optional(),
 });
 
+// Phase 4B: Bridge Execution Frames
+export const BridgeTaskAcceptedFrameSchema = z.object({
+  type: z.literal("device.task.accepted"),
+  taskId: z.string().uuid(),
+  timestamp: z.number().int(),
+});
+
+export const BridgeTaskStartedFrameSchema = z.object({
+  type: z.literal("device.task.started"),
+  taskId: z.string().uuid(),
+  sandboxProfile: z.string(),
+  timestamp: z.number().int(),
+});
+
+export const BridgeTaskProgressFrameSchema = z.object({
+  type: z.literal("device.task.progress"),
+  taskId: z.string().uuid(),
+  progressPercent: z.number().min(0).max(100).optional(),
+  message: z.string(),
+  timestamp: z.number().int(),
+});
+
+export const BridgeTaskLogFrameSchema = z.object({
+  type: z.literal("device.task.log"),
+  taskId: z.string().uuid(),
+  sequence: z.number().int(),
+  stream: z.enum(["stdout", "stderr", "system"]),
+  chunk: z.string(),
+  timestamp: z.number().int(),
+});
+
+export const BridgeTaskApprovalRequiredFrameSchema = z.object({
+  type: z.literal("device.approval.required"),
+  taskId: z.string().uuid(),
+  operation: z.string(),
+  summary: z.string(),
+  details: z.record(z.unknown()),
+  argumentsHash: z.string().min(32),
+  nonce: z.string().min(16),
+  expiresAt: z.number().int(),
+});
+
+export const BridgeTaskCompletedFrameSchema = z.object({
+  type: z.literal("device.task.completed"),
+  taskId: z.string().uuid(),
+  result: z.record(z.unknown()),
+  exitCode: z.number().int().optional(),
+  durationMs: z.number().int().nonnegative(),
+  timestamp: z.number().int(),
+});
+
+export const BridgeTaskFailedFrameSchema = z.object({
+  type: z.literal("device.task.failed"),
+  taskId: z.string().uuid(),
+  code: z.string(),
+  message: z.string(),
+  exitCode: z.number().int().optional(),
+  durationMs: z.number().int().nonnegative(),
+  timestamp: z.number().int(),
+});
+
+export const BridgeTaskUnknownOutcomeFrameSchema = z.object({
+  type: z.literal("device.task.unknown_outcome"),
+  taskId: z.string().uuid(),
+  reason: z.string(),
+  timestamp: z.number().int(),
+});
+
+export const BridgeMcpDiscoveredFrameSchema = z.object({
+  type: z.literal("device.mcp.discovered"),
+  servers: z.array(
+    z.object({
+      name: z.string(),
+      command: z.string(),
+      args: z.array(z.string()),
+      status: z.enum(["ACTIVE", "DISABLED", "CRASHED"]),
+      schemaHash: z.string().optional(),
+      tools: z.array(
+        z.object({
+          name: z.string(),
+          description: z.string().optional(),
+          inputSchema: z.record(z.unknown()),
+        })
+      ),
+    })
+  ),
+  timestamp: z.number().int(),
+});
+
+export const BridgeCapabilitiesReportedFrameSchema = z.object({
+  type: z.literal("device.capabilities.reported"),
+  capabilities: z.array(z.string()),
+  allowedRoots: z.array(z.string()),
+  sandboxStatus: z.object({
+    available: z.boolean(),
+    provider: z.string(),
+    details: z.string().optional(),
+  }),
+  timestamp: z.number().int(),
+});
+
 export const DeviceToServerFrameSchema = z.discriminatedUnion("type", [
   BridgeAuthProofFrameSchema,
   BridgeHeartbeatFrameSchema,
   BridgeStatusFrameSchema,
   BridgeDiagnosticsFrameSchema,
   BridgeDisconnectFrameSchema,
+  BridgeTaskAcceptedFrameSchema,
+  BridgeTaskStartedFrameSchema,
+  BridgeTaskProgressFrameSchema,
+  BridgeTaskLogFrameSchema,
+  BridgeTaskApprovalRequiredFrameSchema,
+  BridgeTaskCompletedFrameSchema,
+  BridgeTaskFailedFrameSchema,
+  BridgeTaskUnknownOutcomeFrameSchema,
+  BridgeMcpDiscoveredFrameSchema,
+  BridgeCapabilitiesReportedFrameSchema,
 ]);
+
+// Phase 4B API DTO Schemas
+export const CreateBridgeTaskSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  deviceId: z.string().uuid("Invalid device ID"),
+  capability: z.string().min(1, "Capability required"),
+  resourceScopes: z.array(z.string()).default([]),
+  parameters: z.record(z.unknown()).default({}),
+  threadId: z.string().uuid().optional(),
+  generationRunId: z.string().uuid().optional(),
+});
+
+export const BridgeTaskDecisionSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  action: z.enum(["approve", "reject"]),
+  rejectionReason: z.string().optional(),
+});
+
+export const ConfigureDevicePolicySchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  allowedRoots: z.array(z.string()).optional(),
+  capabilities: z.array(z.string()).optional(),
+  devicePolicy: z
+    .object({
+      readOnlyRoots: z.array(z.string()).default([]),
+      writableRoots: z.array(z.string()).default([]),
+      allowedMcpServers: z.array(z.string()).default([]),
+      terminalExecutionEnabled: z.boolean().default(false),
+      maxExecutionTimeoutMs: z.number().int().positive().default(120000),
+      maxMemoryBytes: z.number().int().positive().default(1073741824),
+      maxCpuPercent: z.number().min(1).max(100).default(80),
+      maxProcesses: z.number().int().positive().default(5),
+      networkAllowed: z.boolean().default(false),
+      allowedAgentAdapters: z.array(z.string()).default([]),
+    })
+    .optional(),
+});
+
+export const RegisterLocalMcpServerSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  serverName: z.string().min(1).max(128),
+  command: z.string().min(1).max(255),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().optional(),
+  env: z.record(z.string()).optional(),
+});
 
 

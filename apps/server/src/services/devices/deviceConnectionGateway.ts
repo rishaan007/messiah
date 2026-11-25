@@ -401,6 +401,165 @@ export class DeviceConnectionGateway {
             break;
           }
 
+          // Phase 4B: Device Task Execution & Capability Frames
+          case "device.task.accepted": {
+            resetHeartbeatWatchdog();
+            await prisma.bridgeTask.update({
+              where: { id: frame.taskId },
+              data: { status: "ACCEPTED" },
+            }).catch(() => {});
+            break;
+          }
+
+          case "device.task.started": {
+            resetHeartbeatWatchdog();
+            await prisma.bridgeTask.update({
+              where: { id: frame.taskId },
+              data: {
+                status: "RUNNING",
+                startedAt: new Date(frame.timestamp),
+              },
+            }).catch(() => {});
+            break;
+          }
+
+          case "device.task.progress": {
+            resetHeartbeatWatchdog();
+            break;
+          }
+
+          case "device.task.log": {
+            resetHeartbeatWatchdog();
+            await prisma.bridgeTaskLog.create({
+              data: {
+                taskId: frame.taskId,
+                sequence: frame.sequence,
+                stream: frame.stream,
+                chunk: frame.chunk,
+                timestamp: new Date(frame.timestamp),
+              },
+            }).catch(() => {});
+            break;
+          }
+
+          case "device.approval.required": {
+            resetHeartbeatWatchdog();
+            const task = await prisma.bridgeTask.findUnique({ where: { id: frame.taskId } });
+            if (task) {
+              await prisma.bridgeTaskApproval.create({
+                data: {
+                  taskId: task.id,
+                  workspaceId: task.workspaceId,
+                  deviceId: task.deviceId,
+                  operation: frame.operation,
+                  summary: frame.summary,
+                  details: frame.details as any,
+                  argumentsHash: frame.argumentsHash,
+                  nonce: frame.nonce,
+                  expiresAt: new Date(frame.expiresAt),
+                },
+              }).catch(() => {});
+              await prisma.bridgeTask.update({
+                where: { id: task.id },
+                data: { status: "AWAITING_APPROVAL" },
+              }).catch(() => {});
+            }
+            break;
+          }
+
+          case "device.task.completed": {
+            resetHeartbeatWatchdog();
+            await prisma.bridgeTask.update({
+              where: { id: frame.taskId },
+              data: {
+                status: "SUCCEEDED",
+                result: frame.result as any,
+                exitCode: frame.exitCode ?? 0,
+                durationMs: frame.durationMs,
+                completedAt: new Date(frame.timestamp),
+              },
+            }).catch(() => {});
+            break;
+          }
+
+          case "device.task.failed": {
+            resetHeartbeatWatchdog();
+            await prisma.bridgeTask.update({
+              where: { id: frame.taskId },
+              data: {
+                status: "FAILED",
+                errorMessage: frame.message,
+                exitCode: frame.exitCode ?? 1,
+                durationMs: frame.durationMs,
+                completedAt: new Date(frame.timestamp),
+              },
+            }).catch(() => {});
+            break;
+          }
+
+          case "device.task.unknown_outcome": {
+            resetHeartbeatWatchdog();
+            await prisma.bridgeTask.update({
+              where: { id: frame.taskId },
+              data: {
+                status: "UNKNOWN_OUTCOME",
+                errorMessage: frame.reason,
+                completedAt: new Date(frame.timestamp),
+              },
+            }).catch(() => {});
+            break;
+          }
+
+          case "device.capabilities.reported": {
+            resetHeartbeatWatchdog();
+            await prisma.bridgeDevice.update({
+              where: { id: authenticatedDeviceId },
+              data: {
+                capabilities: frame.capabilities,
+                allowedRoots: frame.allowedRoots,
+                lastSeenAt: new Date(),
+              },
+            }).catch(() => {});
+            break;
+          }
+
+          case "device.mcp.discovered": {
+            resetHeartbeatWatchdog();
+            const dev = await prisma.bridgeDevice.findUnique({ where: { id: authenticatedDeviceId } });
+            if (dev) {
+              for (const s of frame.servers) {
+                await prisma.bridgeLocalMcpServer.upsert({
+                  where: {
+                    deviceId_serverName: {
+                      deviceId: dev.id,
+                      serverName: s.name,
+                    },
+                  },
+                  create: {
+                    deviceId: dev.id,
+                    workspaceId: dev.workspaceId,
+                    serverName: s.name,
+                    command: s.command,
+                    args: s.args,
+                    status: s.status,
+                    schemaHash: s.schemaHash,
+                    tools: s.tools as any,
+                    lastDiscoveredAt: new Date(),
+                  },
+                  update: {
+                    command: s.command,
+                    args: s.args,
+                    status: s.status,
+                    schemaHash: s.schemaHash,
+                    tools: s.tools as any,
+                    lastDiscoveredAt: new Date(),
+                  },
+                }).catch(() => {});
+              }
+            }
+            break;
+          }
+
           default:
             break;
         }
@@ -421,6 +580,30 @@ export class DeviceConnectionGateway {
     socket.on("error", () => {
       cleanupAndClose("Socket error", 1006);
     });
+  }
+
+  /**
+   * Checks whether a device is currently connected with an active open WebSocket.
+   */
+  public isDeviceConnected(deviceId: string): boolean {
+    const active = this.activeSockets.get(deviceId);
+    return !!active && active.socket.readyState === active.socket.OPEN;
+  }
+
+  /**
+   * Dispatches a typed server frame to an active bridge device.
+   */
+  public sendToDevice(deviceId: string, frame: object): boolean {
+    const active = this.activeSockets.get(deviceId);
+    if (!active || active.socket.readyState !== active.socket.OPEN) {
+      return false;
+    }
+    try {
+      active.socket.send(JSON.stringify(frame));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

@@ -645,6 +645,36 @@ export interface ServerProtocolErrorFrame {
   message: string;
 }
 
+// Phase 4B: Signed Task Dispatch Frame
+export interface DeviceTaskDispatchFrame {
+  type: "device.task.dispatch";
+  taskId: string;
+  requestId: string;
+  deviceId: string;
+  workspaceId: string;
+  capability: string;
+  resourceScopes: string[];
+  parameters: Record<string, unknown>;
+  argumentsHash: string;
+  issuedAt: number;
+  expiresAt: number;
+  nonce: string;
+  policyVersion: string;
+  approvalReference?: string;
+  serverSignature: string;
+}
+
+export interface DeviceTaskCancelFrame {
+  type: "device.task.cancel";
+  taskId: string;
+  reason: string;
+}
+
+export interface DeviceMcpSyncFrame {
+  type: "device.mcp.sync";
+  requestId: string;
+}
+
 export type ServerToDeviceFrame =
   | ServerChallengeFrame
   | ServerAuthSuccessFrame
@@ -652,7 +682,10 @@ export type ServerToDeviceFrame =
   | ServerHeartbeatAckFrame
   | ServerSessionExpiringFrame
   | ServerDeviceRevokedFrame
-  | ServerProtocolErrorFrame;
+  | ServerProtocolErrorFrame
+  | DeviceTaskDispatchFrame
+  | DeviceTaskCancelFrame
+  | DeviceMcpSyncFrame;
 
 // WebSocket Protocol Frames (Bridge to Server)
 export interface BridgeAuthProofFrame {
@@ -693,11 +726,211 @@ export interface BridgeDisconnectFrame {
   reason?: string;
 }
 
+// Phase 4B: Bridge Task Execution & Capability Frames
+export interface BridgeTaskAcceptedFrame {
+  type: "device.task.accepted";
+  taskId: string;
+  timestamp: number;
+}
+
+export interface BridgeTaskStartedFrame {
+  type: "device.task.started";
+  taskId: string;
+  sandboxProfile: string;
+  timestamp: number;
+}
+
+export interface BridgeTaskProgressFrame {
+  type: "device.task.progress";
+  taskId: string;
+  progressPercent?: number;
+  message: string;
+  timestamp: number;
+}
+
+export interface BridgeTaskLogFrame {
+  type: "device.task.log";
+  taskId: string;
+  sequence: number;
+  stream: "stdout" | "stderr" | "system";
+  chunk: string;
+  timestamp: number;
+}
+
+export interface BridgeTaskApprovalRequiredFrame {
+  type: "device.approval.required";
+  taskId: string;
+  operation: string;
+  summary: string;
+  details: Record<string, unknown>;
+  argumentsHash: string;
+  nonce: string;
+  expiresAt: number;
+}
+
+export interface BridgeTaskCompletedFrame {
+  type: "device.task.completed";
+  taskId: string;
+  result: Record<string, unknown>;
+  exitCode?: number;
+  durationMs: number;
+  timestamp: number;
+}
+
+export interface BridgeTaskFailedFrame {
+  type: "device.task.failed";
+  taskId: string;
+  code: string;
+  message: string;
+  exitCode?: number;
+  durationMs: number;
+  timestamp: number;
+}
+
+export interface BridgeTaskUnknownOutcomeFrame {
+  type: "device.task.unknown_outcome";
+  taskId: string;
+  reason: string;
+  timestamp: number;
+}
+
+export interface BridgeMcpDiscoveredFrame {
+  type: "device.mcp.discovered";
+  servers: Array<{
+    name: string;
+    command: string;
+    args: string[];
+    status: "ACTIVE" | "DISABLED" | "CRASHED";
+    schemaHash?: string;
+    tools: Array<{
+      name: string;
+      description?: string;
+      inputSchema: Record<string, unknown>;
+    }>;
+  }>;
+  timestamp: number;
+}
+
+export interface BridgeCapabilitiesReportedFrame {
+  type: "device.capabilities.reported";
+  capabilities: string[];
+  allowedRoots: string[];
+  sandboxStatus: {
+    available: boolean;
+    provider: string;
+    details?: string;
+  };
+  timestamp: number;
+}
+
 export type DeviceToServerFrame =
   | BridgeAuthProofFrame
   | BridgeHeartbeatFrame
   | BridgeStatusFrame
   | BridgeDiagnosticsFrame
-  | BridgeDisconnectFrame;
+  | BridgeDisconnectFrame
+  | BridgeTaskAcceptedFrame
+  | BridgeTaskStartedFrame
+  | BridgeTaskProgressFrame
+  | BridgeTaskLogFrame
+  | BridgeTaskApprovalRequiredFrame
+  | BridgeTaskCompletedFrame
+  | BridgeTaskFailedFrame
+  | BridgeTaskUnknownOutcomeFrame
+  | BridgeMcpDiscoveredFrame
+  | BridgeCapabilitiesReportedFrame;
+
+// Phase 4B DTOs
+export type BridgeTaskStatus =
+  | "QUEUED"
+  | "AWAITING_APPROVAL"
+  | "DISPATCHED"
+  | "ACCEPTED"
+  | "RUNNING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "CANCEL_REQUESTED"
+  | "CANCELLED"
+  | "UNKNOWN_OUTCOME"
+  | "DEVICE_OFFLINE"
+  | "EXPIRED";
+
+export interface BridgeTaskInfo {
+  id: string;
+  workspaceId: string;
+  deviceId: string;
+  userId: string;
+  threadId?: string | null;
+  generationRunId?: string | null;
+  capability: string;
+  resourceScopes: string[];
+  parameters: Record<string, unknown>;
+  argumentsHash: string;
+  status: BridgeTaskStatus;
+  result?: Record<string, unknown> | null;
+  errorMessage?: string | null;
+  exitCode?: number | null;
+  durationMs?: number | null;
+  issuedAt: string;
+  expiresAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BridgeLocalMcpServerInfo {
+  id: string;
+  deviceId: string;
+  workspaceId: string;
+  serverName: string;
+  command: string;
+  args: string[];
+  cwd?: string | null;
+  env?: Record<string, string> | null;
+  status: "ACTIVE" | "DISABLED" | "CRASHED";
+  schemaHash?: string | null;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    inputSchema: Record<string, unknown>;
+  }> | null;
+  lastDiscoveredAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BridgeTaskApprovalInfo {
+  id: string;
+  taskId: string;
+  workspaceId: string;
+  deviceId: string;
+  requestedByUserId?: string | null;
+  decidedByUserId?: string | null;
+  status: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED";
+  operation: string;
+  summary: string;
+  details: Record<string, unknown>;
+  argumentsHash: string;
+  nonce: string;
+  expiresAt: string;
+  decidedAt?: string | null;
+  rejectionReason?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BridgeDevicePolicy {
+  readOnlyRoots: string[];
+  writableRoots: string[];
+  allowedMcpServers: string[];
+  terminalExecutionEnabled: boolean;
+  maxExecutionTimeoutMs: number;
+  maxMemoryBytes: number;
+  maxCpuPercent: number;
+  maxProcesses: number;
+  networkAllowed: boolean;
+  allowedAgentAdapters: string[];
+}
 
 

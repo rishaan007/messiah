@@ -67,11 +67,11 @@ Pairing is the security boundary where an unauthenticated physical machine is re
 
 ## 3. Protocol Rules & Technical Guarantees
 
-### A. 256-Bit Pairing Secret & Formatting
-- The pairing code is generated using cryptographically strong pseudo-random bytes (`crypto.randomBytes(16)`).
-- Formatted as `MSH-XXXX-XXXX-XXXX` for clear human readability in terminal environments.
-- The plaintext code is returned **once and only once** in the HTTP response of `/pair/initiate`.
-- Only the **SHA-256 hash** of the code (`challengeHash`) is persisted in the PostgreSQL database. Even with full database access, active codes cannot be recovered.
+### A. Full 256-Bit Pairing Secret & Masked CLI Input
+- The pairing code is generated using 32 cryptographically strong random bytes (`crypto.randomBytes(32)`) encoded as a full 43-character Base64URL string prefixed with `MSH_` (i.e. `MSH_<43-char-base64url>`), preserving genuine 256-bit entropy.
+- **No CLI Argument/Env Secret Exposure**: `messiah-bridge pair` prompts interactively via masked terminal input (`askSecret`) rather than accepting the pairing token as a command-line argument or environment variable, preventing exposure in `ps`, shell history, or system logs.
+- The plaintext token is returned **once and only once** in the HTTP response of `/pair/challenge`.
+- Only the **SHA-256 hash** of the token (`challengeHash`) is persisted in the PostgreSQL database. Even with full database access, active codes cannot be recovered.
 
 ### B. Time-To-Live (TTL) & Rate Limiting
 - **Expiration Window**: 5 minutes (300,000 ms). Expired challenges are rejected with HTTP 400 `CHALLENGE_EXPIRED`.

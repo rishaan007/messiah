@@ -5,7 +5,7 @@ import { PairingClient } from "../pairing/pairingClient.js";
 import { DiagnosticsService } from "../diagnostics/diagnosticsService.js";
 import { getPlatformKeystore } from "../keystore/index.js";
 import { DeviceIdentityManager } from "../identity/deviceIdentity.js";
-import { askQuestion } from "./prompt.js";
+import { askQuestion, askSecret } from "./prompt.js";
 
 const program = new Command();
 
@@ -80,9 +80,8 @@ program
 // 2. messiah-bridge pair
 program
   .command("pair")
-  .description("Pair this computer with a Messiah workspace using a one-time code")
+  .description("Pair this computer with a Messiah workspace using a one-time code (prompted via masked input)")
   .option("-s, --server <url>", "Messiah server URL", "http://localhost:3001")
-  .option("-c, --code <code>", "One-time pairing code (prompted securely if omitted)")
   .option("-n, --name <name>", "Custom display name for this device")
   .action(async (opts) => {
     console.log("================================================================================");
@@ -95,10 +94,8 @@ program
         serverUrl = await askQuestion("Messiah Server URL", "http://localhost:3001");
       }
 
-      let pairingCode = opts.code;
-      if (!pairingCode) {
-        pairingCode = await askQuestion("Enter the 256-bit Pairing Code from /settings/devices");
-      }
+      // Security Correction B: Never accept pairing secret via CLI flags or arguments (prevents ps, shell history, and log leaks)
+      const pairingCode = await askSecret("Enter the 256-bit Pairing Code from /settings/devices (hidden input)");
 
       if (!pairingCode || pairingCode.trim().length < 6) {
         console.error("[Pairing] Invalid pairing code.");

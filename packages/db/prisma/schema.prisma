@@ -61,6 +61,9 @@ model User {
   decidedToolApprovals      ToolApproval[]        @relation("DecidedToolApprovals")
   ownedBridgeDevices        BridgeDevice[]        @relation("DeviceOwner")
   requestedPairingChallenges DevicePairingChallenge[] @relation("PairingRequester")
+  createdBridgeTasks        BridgeTask[]           @relation("CreatedBridgeTasks")
+  requestedBridgeApprovals   BridgeTaskApproval[]   @relation("RequestedBridgeApprovals")
+  decidedBridgeApprovals     BridgeTaskApproval[]   @relation("DecidedBridgeApprovals")
 
   @@index([externalProvider, externalId])
   @@map("users")
@@ -87,6 +90,9 @@ model Workspace {
   toolApprovals       ToolApproval[]
   bridgeDevices       BridgeDevice[]
   pairingChallenges   DevicePairingChallenge[]
+  localMcpServers     BridgeLocalMcpServer[]
+  bridgeTasks         BridgeTask[]
+  bridgeTaskApprovals BridgeTaskApproval[]
 
   @@index([ownerId])
   @@map("workspaces")
@@ -582,6 +588,9 @@ model BridgeDevice {
   publicKeyFingerprint String                    @map("public_key_fingerprint") @db.VarChar(128)
   protocolVersion      String                    @default("2026-08-01") @map("protocol_version") @db.VarChar(32)
   status               DeviceStatus              @default(PENDING_APPROVAL)
+  allowedRoots         String[]                  @default([]) @map("allowed_roots")
+  capabilities         String[]                  @default([])
+  devicePolicy         Json?                     @map("device_policy") @db.JsonB
   lastSeenAt           DateTime?                 @map("last_seen_at") @db.Timestamptz(6)
   lastConnectedAt      DateTime?                 @map("last_connected_at") @db.Timestamptz(6)
   pairedAt             DateTime?                 @map("paired_at") @db.Timestamptz(6)
@@ -594,6 +603,9 @@ model BridgeDevice {
   ownerUser            User                      @relation("DeviceOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
   sessions             DeviceConnectionSession[]
   pairingChallenges    DevicePairingChallenge[]
+  localMcpServers      BridgeLocalMcpServer[]
+  tasks                BridgeTask[]
+  taskApprovals        BridgeTaskApproval[]
 
   @@index([workspaceId, status])
   @@index([publicKeyFingerprint])
@@ -648,4 +660,138 @@ model DeviceConnectionSession {
   @@index([deviceId, disconnectedAt])
   @@index([expiresAt])
   @@map("device_connection_sessions")
+}
+
+// ==============================================================================
+// 10. LOCAL CAPABILITY BROKER, LOCAL MCP & TASK EXECUTION (PHASE 4B)
+// ==============================================================================
+
+enum LocalMcpServerStatus {
+  ACTIVE
+  DISABLED
+  CRASHED
+}
+
+enum BridgeTaskStatus {
+  QUEUED
+  AWAITING_APPROVAL
+  DISPATCHED
+  ACCEPTED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCEL_REQUESTED
+  CANCELLED
+  UNKNOWN_OUTCOME
+  DEVICE_OFFLINE
+  EXPIRED
+}
+
+model BridgeLocalMcpServer {
+  id               String               @id @default(uuid()) @db.Uuid
+  deviceId         String               @map("device_id") @db.Uuid
+  workspaceId      String               @map("workspace_id") @db.Uuid
+  serverName       String               @map("server_name") @db.VarChar(128)
+  command          String               @db.VarChar(255)
+  args             String[]             @default([])
+  cwd              String?              @db.Text
+  env              Json?                @db.JsonB
+  status           LocalMcpServerStatus @default(ACTIVE)
+  schemaHash       String?              @map("schema_hash") @db.VarChar(64)
+  tools            Json?                @db.JsonB
+  lastDiscoveredAt DateTime?            @map("last_discovered_at") @db.Timestamptz(6)
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  device           BridgeDevice         @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([deviceId, serverName])
+  @@index([workspaceId, status])
+  @@map("bridge_local_mcp_servers")
+}
+
+model BridgeTask {
+  id              String               @id @default(uuid()) @db.Uuid
+  workspaceId     String               @map("workspace_id") @db.Uuid
+  deviceId        String               @map("device_id") @db.Uuid
+  userId          String               @map("user_id") @db.Uuid
+  threadId        String?              @map("thread_id") @db.Uuid
+  generationRunId String?              @map("generation_run_id") @db.Uuid
+  capability      String               @db.VarChar(64)
+  resourceScopes  String[]             @default([]) @map("resource_scopes")
+  parameters      Json                 @default("{}") @db.JsonB
+  argumentsHash   String               @map("arguments_hash") @db.VarChar(64)
+  status          BridgeTaskStatus     @default(QUEUED)
+  result          Json?                @db.JsonB
+  errorMessage    String?              @map("error_message") @db.Text
+  exitCode        Int?                 @map("exit_code")
+  durationMs      Int?                 @map("duration_ms")
+  issuedAt        DateTime             @default(now()) @map("issued_at") @db.Timestamptz(6)
+  expiresAt       DateTime             @map("expires_at") @db.Timestamptz(6)
+  startedAt       DateTime?            @map("started_at") @db.Timestamptz(6)
+  completedAt     DateTime?            @map("completed_at") @db.Timestamptz(6)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  device          BridgeDevice         @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  user            User                 @relation("CreatedBridgeTasks", fields: [userId], references: [id], onDelete: Cascade)
+  approval        BridgeTaskApproval?
+  logs            BridgeTaskLog[]
+
+  @@index([deviceId, status])
+  @@index([workspaceId, status])
+  @@index([threadId])
+  @@index([expiresAt])
+  @@map("bridge_tasks")
+}
+
+model BridgeTaskApproval {
+  id                String             @id @default(uuid()) @db.Uuid
+  taskId            String             @unique @map("task_id") @db.Uuid
+  workspaceId       String             @map("workspace_id") @db.Uuid
+  deviceId          String             @map("device_id") @db.Uuid
+  requestedByUserId String?            @map("requested_by_user_id") @db.Uuid
+  decidedByUserId   String?            @map("decided_by_user_id") @db.Uuid
+  status            ToolApprovalStatus @default(PENDING)
+  operation         String             @db.VarChar(128)
+  summary           String             @db.Text
+  details           Json               @default("{}") @db.JsonB
+  argumentsHash     String             @map("arguments_hash") @db.VarChar(64)
+  nonce             String             @db.VarChar(64)
+  expiresAt         DateTime           @map("expires_at") @db.Timestamptz(6)
+  decidedAt         DateTime?          @map("decided_at") @db.Timestamptz(6)
+  rejectionReason   String?            @map("rejection_reason") @db.Text
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  task              BridgeTask         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  device            BridgeDevice       @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  requestedByUser   User?              @relation("RequestedBridgeApprovals", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  decidedByUser     User?              @relation("DecidedBridgeApprovals", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([deviceId, status])
+  @@index([expiresAt])
+  @@map("bridge_task_approvals")
+}
+
+model BridgeTaskLog {
+  id        String     @id @default(uuid()) @db.Uuid
+  taskId    String     @map("task_id") @db.Uuid
+  sequence  Int
+  stream    String     @db.VarChar(16) // "stdout" | "stderr" | "system"
+  chunk     String     @db.Text
+  timestamp DateTime   @default(now()) @db.Timestamptz(6)
+
+  // Relations
+  task      BridgeTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, sequence])
+  @@map("bridge_task_logs")
 }

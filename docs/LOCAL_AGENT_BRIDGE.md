@@ -1,6 +1,6 @@
 # Messiah Local Agent Bridge Architecture
 
-**Status**: Phase 4A Implemented & Verified  
+**Status**: Phase 4B Implemented & Verified  
 **Package**: `apps/bridge-daemon` (`@messiah/bridge-daemon`)  
 **Tagline**: *One intelligence layer. Every agent. Every device.*
 
@@ -10,10 +10,10 @@
 
 The Messiah Local Agent Bridge is a lightweight, background daemon designed to run on user workstations and servers (macOS ARM64/x64, Linux x64/ARM64, Windows x64/ARM64). It acts as the secure edge execution node connecting a user's machine to the Messiah AI Agent Workspace.
 
-In Phase 4A, the Bridge establishes the **foundational secure communication plane**:
+In Phase 4A & 4B, the Bridge establishes both the **outbound secure communication plane** and the **sandboxed workstation capability broker**:
 - **Outbound-Only Connectivity**: Strictly connects outward via TLS/WSS to Messiah Cloud. The Bridge never binds to or exposes inbound TCP/UDP ports on the user's computer.
-- **Cryptographic Device Binding**: Uses an Ed25519 keypair generated on the machine, stored exclusively in the OS-backed secure credential store (macOS Keychain / AES-256-GCM encrypted vault with `0600` permissions).
-- **Zero Remote Execution (Phase 4A Bound)**: Purely handles pairing, cryptographic authentication, and bidirectional heartbeat maintenance. No command execution, terminal sessions, child process spawning, filesystem manipulation, or remote desktop capabilities are enabled in Phase 4A.
+- **Cryptographic Device Binding**: Uses an Ed25519 keypair stored in native OS credential stores (macOS Keychain, Windows DPAPI, Linux Secret Service) or an AES-256-GCM v2 vault with 600,000 iterations PBKDF2-HMAC-SHA512.
+- **Capability Broker & Containment**: Executes cryptographically signed tasks (`MESSIAH_TASK_AUTH:...`) across 13 capabilities (`filesystem.*`, `mcp.*`, `process.*`, `agent.*`) bounded by `PathGuard` realpath containment and `ProcessSandbox` isolation.
 
 ```
 +-------------------------------------------------------------------------+

@@ -261,6 +261,177 @@ export class DeviceManagementService {
 
     return updated;
   }
+
+  /**
+   * Updates device execution policy, allowed project roots, and enabled capabilities.
+   * Requires OWNER or ADMIN role.
+   */
+  public async updateDevicePolicy(
+    deviceId: string,
+    workspaceId: string,
+    userId: string,
+    update: {
+      allowedRoots?: string[];
+      capabilities?: string[];
+      devicePolicy?: Record<string, unknown>;
+    }
+  ) {
+    const role = await workspaceService.getUserRole(workspaceId, userId);
+    if (!role) {
+      throw new DeviceManagementError(404, "WORKSPACE_NOT_FOUND", "Workspace not found or access denied.");
+    }
+    if (role !== "OWNER" && role !== "ADMIN") {
+      throw new DeviceManagementError(403, "FORBIDDEN_ROLE", "Only workspace OWNER or ADMIN can configure device policy.");
+    }
+
+    const device = await prisma.bridgeDevice.findUnique({
+      where: { id: deviceId },
+    });
+
+    if (!device || device.workspaceId !== workspaceId) {
+      throw new DeviceManagementError(404, "DEVICE_NOT_FOUND", "Device not found in this workspace.");
+    }
+
+    const data: Record<string, unknown> = {};
+    if (update.allowedRoots !== undefined) {
+      data.allowedRoots = update.allowedRoots;
+    }
+    if (update.capabilities !== undefined) {
+      data.capabilities = update.capabilities;
+    }
+    if (update.devicePolicy !== undefined) {
+      data.devicePolicy = update.devicePolicy;
+    }
+
+    const updated = await prisma.bridgeDevice.update({
+      where: { id: deviceId },
+      data,
+    });
+
+    return updated;
+  }
+
+  /**
+   * Retrieves capabilities, allowed project roots, and policy for a device.
+   */
+  public async getDeviceCapabilities(deviceId: string, workspaceId: string, userId: string) {
+    const isMember = await workspaceService.isUserMember(workspaceId, userId);
+    if (!isMember) {
+      throw new DeviceManagementError(404, "WORKSPACE_NOT_FOUND", "Workspace not found or access denied.");
+    }
+
+    const device = await prisma.bridgeDevice.findUnique({
+      where: { id: deviceId },
+      include: {
+        localMcpServers: true,
+      },
+    });
+
+    if (!device || device.workspaceId !== workspaceId) {
+      throw new DeviceManagementError(404, "DEVICE_NOT_FOUND", "Device not found in this workspace.");
+    }
+
+    const isOnline = await devicePresenceService.isDeviceOnline(device.id);
+
+    return {
+      deviceId: device.id,
+      displayName: device.displayName,
+      platform: device.platform,
+      architecture: device.architecture,
+      isOnline: device.status === "ACTIVE" && isOnline,
+      capabilities: device.capabilities,
+      allowedRoots: device.allowedRoots,
+      devicePolicy: device.devicePolicy,
+      localMcpServers: device.localMcpServers,
+      updatedAt: device.updatedAt.toISOString(),
+    };
+  }
+
+  /**
+   * Lists local MCP servers registered on the device.
+   */
+  public async listLocalMcpServers(deviceId: string, workspaceId: string, userId: string) {
+    const isMember = await workspaceService.isUserMember(workspaceId, userId);
+    if (!isMember) {
+      throw new DeviceManagementError(404, "WORKSPACE_NOT_FOUND", "Workspace not found or access denied.");
+    }
+
+    const device = await prisma.bridgeDevice.findUnique({
+      where: { id: deviceId },
+    });
+
+    if (!device || device.workspaceId !== workspaceId) {
+      throw new DeviceManagementError(404, "DEVICE_NOT_FOUND", "Device not found in this workspace.");
+    }
+
+    const servers = await prisma.bridgeLocalMcpServer.findMany({
+      where: { deviceId },
+      orderBy: { serverName: "asc" },
+    });
+
+    return servers;
+  }
+
+  /**
+   * Registers or updates a local MCP server configuration on the device.
+   * Requires OWNER or ADMIN role.
+   */
+  public async registerLocalMcpServer(
+    deviceId: string,
+    workspaceId: string,
+    userId: string,
+    input: {
+      serverName: string;
+      command: string;
+      args?: string[];
+      cwd?: string;
+      env?: Record<string, string>;
+    }
+  ) {
+    const role = await workspaceService.getUserRole(workspaceId, userId);
+    if (!role) {
+      throw new DeviceManagementError(404, "WORKSPACE_NOT_FOUND", "Workspace not found or access denied.");
+    }
+    if (role !== "OWNER" && role !== "ADMIN") {
+      throw new DeviceManagementError(403, "FORBIDDEN_ROLE", "Only workspace OWNER or ADMIN can register local MCP servers.");
+    }
+
+    const device = await prisma.bridgeDevice.findUnique({
+      where: { id: deviceId },
+    });
+
+    if (!device || device.workspaceId !== workspaceId) {
+      throw new DeviceManagementError(404, "DEVICE_NOT_FOUND", "Device not found in this workspace.");
+    }
+
+    const server = await prisma.bridgeLocalMcpServer.upsert({
+      where: {
+        deviceId_serverName: {
+          deviceId,
+          serverName: input.serverName,
+        },
+      },
+      create: {
+        deviceId,
+        workspaceId,
+        serverName: input.serverName,
+        command: input.command,
+        args: input.args || [],
+        cwd: input.cwd,
+        env: input.env as any,
+        status: "ACTIVE",
+      },
+      update: {
+        command: input.command,
+        args: input.args || [],
+        cwd: input.cwd,
+        env: input.env as any,
+        status: "ACTIVE",
+      },
+    });
+
+    return server;
+  }
 }
 
 export const deviceManagementService = new DeviceManagementService();

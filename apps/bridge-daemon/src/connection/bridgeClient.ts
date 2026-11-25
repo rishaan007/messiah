@@ -10,16 +10,22 @@ import {
   type BridgeStatusFrame,
   type BridgeDiagnosticsFrame,
   type BridgeDisconnectFrame,
+  type BridgeCapabilitiesReportedFrame,
+  type BridgeMcpDiscoveredFrame,
+  type DeviceTaskDispatchFrame,
 } from "@messiah/shared";
 import { DeviceIdentityManager, type DeviceIdentity } from "../identity/deviceIdentity.js";
 import { PairingClient, type PairingConfig } from "../pairing/pairingClient.js";
 import { getPlatformKeystore, type IKeyStore } from "../keystore/index.js";
+import { TaskExecutor } from "../tasks/taskExecutor.js";
+import { SandboxDetector } from "../sandbox/sandboxDetector.js";
 
 export interface BridgeClientOptions {
   serverUrl?: string;
   keystore?: IKeyStore;
   customConfigDir?: string;
   autoReconnect?: boolean;
+  serverSigningSecret?: string;
 }
 
 export class BridgeClient extends EventEmitter {
@@ -28,6 +34,8 @@ export class BridgeClient extends EventEmitter {
   private keystore: IKeyStore;
   private identity: DeviceIdentity | null = null;
   private config: PairingConfig | null = null;
+  private taskExecutor: TaskExecutor;
+  private serverSigningSecret: string;
 
   private isRunning = false;
   private isConnected = false;
@@ -42,6 +50,12 @@ export class BridgeClient extends EventEmitter {
     super();
     this.keystore = options.keystore || getPlatformKeystore(options.customConfigDir);
     this.pairingClient = new PairingClient(this.keystore, options.customConfigDir);
+    this.taskExecutor = new TaskExecutor(options.customConfigDir);
+    this.serverSigningSecret = options.serverSigningSecret || process.env.MESSIAH_SERVER_SIGNING_KEY || "messiah_default_server_signing_secret_min_32_chars";
+  }
+
+  public getTaskExecutor(): TaskExecutor {
+    return this.taskExecutor;
   }
 
   public getIsConnected(): boolean {
@@ -147,7 +161,23 @@ export class BridgeClient extends EventEmitter {
         case "device.auth.success": {
           this.isConnected = true;
           this.startHeartbeatLoop(frame.heartbeatIntervalMs);
+          this.reportCapabilities();
           this.emit("connected", frame);
+          break;
+        }
+
+        case "device.task.dispatch": {
+          this.handleTaskDispatch(frame);
+          break;
+        }
+
+        case "device.task.cancel": {
+          this.taskExecutor.cancelTask(frame.taskId);
+          break;
+        }
+
+        case "device.mcp.sync": {
+          this.reportLocalMcp();
           break;
         }
 
@@ -285,6 +315,88 @@ export class BridgeClient extends EventEmitter {
     if (this.isRunning && !this.isRevoked) {
       this.scheduleReconnect();
     }
+  }
+
+  /**
+   * Reports device capabilities, approved project roots, and sandbox availability to Messiah Cloud.
+   */
+  public async reportCapabilities(): Promise<void> {
+    if (!this.isConnected) return;
+    try {
+      const sandboxStatus = await SandboxDetector.detect();
+      const capabilities = this.taskExecutor.getCapabilityRegistry().getNames();
+      const allowedRoots = this.taskExecutor.getPolicyService().getAllowedRoots();
+
+      const frame: BridgeCapabilitiesReportedFrame = {
+        type: "device.capabilities.reported",
+        capabilities,
+        allowedRoots,
+        sandboxStatus: {
+          available: sandboxStatus.available,
+          provider: sandboxStatus.providerName,
+          details: sandboxStatus.reason,
+        },
+        timestamp: Date.now(),
+      };
+      this.send(frame);
+    } catch {}
+  }
+
+  /**
+   * Discovers tools on registered local MCP servers and reports them to Messiah Cloud.
+   */
+  public async reportLocalMcp(): Promise<void> {
+    if (!this.isConnected) return;
+    try {
+      const mcpCap = this.taskExecutor.getCapabilityRegistry().get("mcp.discover");
+      if (mcpCap) {
+        const allowedRoots = this.taskExecutor.getPolicyService().getAllowedRoots();
+        const res = await mcpCap.execute(
+          {
+            taskId: "local-mcp-sync",
+            deviceId: this.identity?.deviceId || "",
+            workspaceId: this.config?.workspaceId || "",
+            policyService: this.taskExecutor.getPolicyService(),
+            sandbox: new (await import("../sandbox/processSandbox.js")).ProcessSandbox(),
+            allowedRoots,
+          },
+          {}
+        );
+
+        const frame: BridgeMcpDiscoveredFrame = {
+          type: "device.mcp.discovered",
+          servers: (res.servers as any) || [],
+          timestamp: Date.now(),
+        };
+        this.send(frame);
+      }
+    } catch {}
+  }
+
+  /**
+   * Dispatches task to TaskExecutor and routes streaming frames back to Messiah Cloud.
+   */
+  private handleTaskDispatch(frame: DeviceTaskDispatchFrame): void {
+    this.taskExecutor.executeTask(frame, this.serverSigningSecret, {
+      onAccepted: (taskId) => {
+        this.send({ type: "device.task.accepted", taskId, timestamp: Date.now() });
+      },
+      onStarted: (taskId, sandboxProfile) => {
+        this.send({ type: "device.task.started", taskId, sandboxProfile, timestamp: Date.now() });
+      },
+      onProgress: (taskId, percent, message) => {
+        this.send({ type: "device.task.progress", taskId, progressPercent: percent, message, timestamp: Date.now() });
+      },
+      onLog: (taskId, sequence, stream, chunk) => {
+        this.send({ type: "device.task.log", taskId, sequence, stream, chunk, timestamp: Date.now() });
+      },
+      onCompleted: (taskId, result, durationMs) => {
+        this.send({ type: "device.task.completed", taskId, result, durationMs, timestamp: Date.now() });
+      },
+      onFailed: (taskId, code, message, durationMs) => {
+        this.send({ type: "device.task.failed", taskId, code, message, durationMs, timestamp: Date.now() });
+      },
+    });
   }
 
   /**

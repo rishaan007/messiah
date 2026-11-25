@@ -7,13 +7,19 @@ import {
   RejectPairingSchema,
   RenameDeviceSchema,
   DeviceActionSchema,
+  CreateBridgeTaskSchema,
+  BridgeTaskDecisionSchema,
+  ConfigureDevicePolicySchema,
+  RegisterLocalMcpServerSchema,
 } from "@messiah/shared";
 import {
   devicePairingService,
   deviceManagementService,
   deviceConnectionGateway,
+  deviceTaskService,
   DevicePairingError,
   DeviceManagementError,
+  DeviceTaskError,
 } from "../../../services/devices/index.js";
 
 export const deviceRoutes: FastifyPluginAsync = async (fastify) => {
@@ -455,6 +461,423 @@ export const deviceRoutes: FastifyPluginAsync = async (fastify) => {
         });
       } catch (err: unknown) {
         if (err instanceof DeviceManagementError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * GET /api/v1/devices/:deviceId/capabilities
+   * Fetches capabilities, allowed project roots, policy, and registered local MCP servers.
+   */
+  fastify.get<{ Params: { deviceId: string }; Querystring: { workspaceId?: string } }>(
+    "/devices/:deviceId/capabilities",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const workspaceId = request.query.workspaceId;
+      if (!workspaceId) {
+        return reply.code(422).send({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "workspaceId query parameter is required." },
+        });
+      }
+
+      try {
+        const result = await deviceManagementService.getDeviceCapabilities(
+          request.params.deviceId,
+          workspaceId,
+          request.user.id
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceManagementError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/devices/:deviceId/policy
+   * Updates device execution policy, allowed project roots, and enabled capabilities.
+   */
+  fastify.post<{ Params: { deviceId: string }; Body: unknown }>(
+    "/devices/:deviceId/policy",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const parseResult = ConfigureDevicePolicySchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.code(422).send({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: parseResult.error.errors[0]?.message || "Invalid policy payload",
+          },
+        });
+      }
+
+      try {
+        const result = await deviceManagementService.updateDevicePolicy(
+          request.params.deviceId,
+          parseResult.data.workspaceId,
+          request.user.id,
+          {
+            allowedRoots: parseResult.data.allowedRoots,
+            capabilities: parseResult.data.capabilities,
+            devicePolicy: parseResult.data.devicePolicy as any,
+          }
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceManagementError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * GET /api/v1/devices/:deviceId/mcp
+   * Lists local MCP stdio servers registered for this device.
+   */
+  fastify.get<{ Params: { deviceId: string }; Querystring: { workspaceId?: string } }>(
+    "/devices/:deviceId/mcp",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const workspaceId = request.query.workspaceId;
+      if (!workspaceId) {
+        return reply.code(422).send({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "workspaceId query parameter is required." },
+        });
+      }
+
+      try {
+        const result = await deviceManagementService.listLocalMcpServers(
+          request.params.deviceId,
+          workspaceId,
+          request.user.id
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceManagementError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/devices/:deviceId/mcp
+   * Registers a new local stdio MCP server for the bridge daemon.
+   */
+  fastify.post<{ Params: { deviceId: string }; Body: unknown }>(
+    "/devices/:deviceId/mcp",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const parseResult = RegisterLocalMcpServerSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.code(422).send({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: parseResult.error.errors[0]?.message || "Invalid local MCP payload",
+          },
+        });
+      }
+
+      try {
+        const result = await deviceManagementService.registerLocalMcpServer(
+          request.params.deviceId,
+          parseResult.data.workspaceId,
+          request.user.id,
+          parseResult.data
+        );
+        return reply.code(201).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceManagementError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/devices/:deviceId/tasks
+   * Creates and cryptographically authorizes a task to execute on the workstation.
+   */
+  fastify.post<{ Params: { deviceId: string }; Body: unknown }>(
+    "/devices/:deviceId/tasks",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const parseResult = CreateBridgeTaskSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.code(422).send({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: parseResult.error.errors[0]?.message || "Invalid task request payload",
+          },
+        });
+      }
+
+      try {
+        const result = await deviceTaskService.createAndDispatchTask({
+          workspaceId: parseResult.data.workspaceId,
+          userId: request.user.id,
+          deviceId: request.params.deviceId,
+          capability: parseResult.data.capability,
+          resourceScopes: parseResult.data.resourceScopes,
+          parameters: parseResult.data.parameters,
+          threadId: parseResult.data.threadId,
+          generationRunId: parseResult.data.generationRunId,
+        });
+        return reply.code(201).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceTaskError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * GET /api/v1/devices/:deviceId/tasks
+   * Lists tasks executed or executing on a specific device.
+   */
+  fastify.get<{ Params: { deviceId: string }; Querystring: { workspaceId?: string; limit?: string } }>(
+    "/devices/:deviceId/tasks",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const workspaceId = request.query.workspaceId;
+      if (!workspaceId) {
+        return reply.code(422).send({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "workspaceId query parameter is required." },
+        });
+      }
+      const limit = request.query.limit ? parseInt(request.query.limit, 10) : 50;
+
+      try {
+        const result = await deviceTaskService.listTasks(
+          workspaceId,
+          request.params.deviceId,
+          request.user.id,
+          limit
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceTaskError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * GET /api/v1/devices/tasks/:taskId
+   * Retrieves single task details with approval history.
+   */
+  fastify.get<{ Params: { taskId: string }; Querystring: { workspaceId?: string } }>(
+    "/devices/tasks/:taskId",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const workspaceId = request.query.workspaceId;
+      if (!workspaceId) {
+        return reply.code(422).send({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "workspaceId query parameter is required." },
+        });
+      }
+
+      try {
+        const result = await deviceTaskService.getTask(
+          request.params.taskId,
+          workspaceId,
+          request.user.id
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceTaskError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * GET /api/v1/devices/tasks/:taskId/logs
+   * Streams execution output chunks from stdout/stderr/system for a task.
+   */
+  fastify.get<{ Params: { taskId: string }; Querystring: { workspaceId?: string } }>(
+    "/devices/tasks/:taskId/logs",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const workspaceId = request.query.workspaceId;
+      if (!workspaceId) {
+        return reply.code(422).send({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "workspaceId query parameter is required." },
+        });
+      }
+
+      try {
+        const result = await deviceTaskService.getTaskLogs(
+          request.params.taskId,
+          workspaceId,
+          request.user.id
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceTaskError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/devices/tasks/:taskId/approve
+   * Workspace OWNER/ADMIN approves a pending sensitive workstation operation.
+   */
+  fastify.post<{ Params: { taskId: string }; Body: unknown }>(
+    "/devices/tasks/:taskId/approve",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const parseResult = BridgeTaskDecisionSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.code(422).send({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: parseResult.error.errors[0]?.message || "Invalid approval decision payload",
+          },
+        });
+      }
+
+      try {
+        const result = await deviceTaskService.handleApprovalDecision(
+          request.params.taskId,
+          parseResult.data.workspaceId,
+          request.user.id,
+          "approve"
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceTaskError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/devices/tasks/:taskId/reject
+   * Workspace OWNER/ADMIN rejects a pending sensitive workstation operation.
+   */
+  fastify.post<{ Params: { taskId: string }; Body: unknown }>(
+    "/devices/tasks/:taskId/reject",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const parseResult = BridgeTaskDecisionSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.code(422).send({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: parseResult.error.errors[0]?.message || "Invalid rejection decision payload",
+          },
+        });
+      }
+
+      try {
+        const result = await deviceTaskService.handleApprovalDecision(
+          request.params.taskId,
+          parseResult.data.workspaceId,
+          request.user.id,
+          "reject",
+          parseResult.data.rejectionReason
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceTaskError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
+   * POST /api/v1/devices/tasks/:taskId/cancel
+   * Cancels an active or queued bridge task.
+   */
+  fastify.post<{ Params: { taskId: string }; Body: { workspaceId?: string; reason?: string } }>(
+    "/devices/tasks/:taskId/cancel",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const body = request.body || {};
+      if (!body.workspaceId) {
+        return reply.code(422).send({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: "workspaceId is required in body." },
+        });
+      }
+
+      try {
+        const result = await deviceTaskService.cancelTask(
+          request.params.taskId,
+          body.workspaceId,
+          request.user.id,
+          body.reason
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceTaskError) {
           return reply.code(err.statusCode).send({
             success: false,
             error: { code: err.code, message: err.message },

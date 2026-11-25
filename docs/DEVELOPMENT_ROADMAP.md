@@ -187,15 +187,17 @@ gantt
 
 ---
 
-### Phase 4B: Local Tool Execution, Workstation Sandboxing & Real-Time Broker (NEXT)
+### Phase 4B: Local Agent Execution, Workstation Sandboxing & Cross-Device Control (COMPLETE)
 
-- **Primary Goal**: Enable the Messiah Agent Engine to securely execute local tools on paired workstations via the established WebSocket connection, guarded by canonical path containment, command allowlists, and real-time Human-in-the-Loop (HITL) approval modals.
+- **Primary Goal**: Connect Messiah's Local Agent Bridge to genuine workstation capabilities—filesystem containment, sandboxed process execution, local stdio MCP integration, signed task authorization, and cross-device control from Web, iOS, iPad, Android, macOS, Windows, and Linux.
 - **Key Deliverables**:
-  - **Local Tool Protocol**: RPC framing over established WebSocket connection for local tool execution requests and streaming responses.
-  - **Sandboxed Runner**: Canonical path containment (`realpath`), command blacklist validator, and clean subprocess spawning.
-  - **Approval Broker**: Interactive push modal on Web/Mobile for workstation commands with cryptographic nonce verification.
-  - **Local MCP Server Stdio Spawning**: Spawning and managing local MCP server processes over stdio on the user's workstation.
-- **Status**: Next Milestone.
+  - **Phase 4A Security Audit Corrections**: Full 256-bit Base64URL pairing tokens (`MSH_<43-char>`), masked interactive CLI pairing input (eliminating CLI/env leaks), native OS credential stores (macOS Keychain, Windows DPAPI/ACL, Linux Secret Service fail-closed), and upgraded 600,000-iteration PBKDF2-HMAC-SHA512 keystore v2.
+  - **Local Capability Broker (`@messiah/bridge-daemon`)**: Implemented 13 registered capabilities (`filesystem.*`, `mcp.*`, `process.*`, `agent.*`), `TaskSignatureVerifier` (`MESSIAH_TASK_AUTH:...`), and `ReplayGuard`.
+  - **Workstation Sandboxing & PathGuard**: Canonical path containment (`realpathSync`), symlink escape defense, sensitive file exclusion (`.ssh`, `.aws`, `.env`), atomic file writes with drift detection, and `ProcessSandbox` (`shell: false`, scrubbed env, SIGKILL process-tree cleanup, 1MB output cap).
+  - **Local Stdio MCP Manager**: Separate `stdin`, `stdout` (JSON-RPC 2.0), and `stderr` (logs) channels with automated tool schema hashing and WebSocket sync (`device.mcp.discovered`).
+  - **Backend Task Engine & Database Migration `7_bridge_tasks_and_capabilities`**: Added `BridgeTask`, `BridgeTaskApproval`, `BridgeTaskLog`, and `BridgeLocalMcpServer` models, `TaskAuthorizationService`, `DeviceTaskService`, and Phase 4B REST API endpoints.
+  - **Cross-Device Control UI (`apps/web`)**: Capability & security policy manager at `/settings/devices/[deviceId]/capabilities`, `BridgeTaskCard` with live streaming logs and approval controls, and workstation execution target selection in `ChatWorkspace`.
+- **Status**: Completed.
 
 ---
 

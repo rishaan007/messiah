@@ -20,6 +20,7 @@ import {
   AlertCircle,
   RefreshCw,
   ShieldAlert,
+  Laptop2,
 } from "lucide-react";
 import { Button, cn } from "@messiah/ui";
 import { Header } from "@/components/Header";
@@ -38,6 +39,7 @@ import type {
   ModelInfo,
   ToolCallInfo,
   ToolApprovalInfo,
+  BridgeDeviceInfo,
 } from "@messiah/shared";
 
 interface ChatWorkspaceProps {
@@ -89,6 +91,10 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
   // MCP Tools & Approvals State
   const [threadToolCalls, setThreadToolCalls] = useState<ToolCallInfo[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<ToolApprovalInfo[]>([]);
+
+  // Local Agent Bridge Target State
+  const [pairedDevices, setPairedDevices] = useState<BridgeDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
 
   // WebSocket State
   const [wsConnected, setWsConnected] = useState(false);
@@ -174,6 +180,18 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
     };
 
     loadConnections();
+
+    // Load paired bridge devices for target execution
+    fetch(`${apiUrl}/api/v1/devices?workspaceId=${activeWorkspace.id}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => {
+        if (body?.success) {
+          setPairedDevices(body.data || []);
+        }
+      })
+      .catch((err) => console.error("Failed to load paired bridge devices:", err));
   }, [authToken, activeWorkspace, apiUrl]);
 
   // 3. Load Models for Selected Connection
@@ -739,6 +757,16 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
 
     const idempotencyKey = `idem-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
+    const selectedDevice = pairedDevices.find((d) => d.id === selectedDeviceId);
+    const effectiveSystemPrompt = selectedDevice
+      ? [
+          systemPrompt.trim(),
+          `[Target Workstation Context: ${selectedDevice.displayName} (ID: ${selectedDevice.id}, Platform: ${selectedDevice.platform}-${selectedDevice.architecture}). Authorized local bridge execution is active.]`,
+        ]
+          .filter(Boolean)
+          .join("\n\n")
+      : systemPrompt.trim() || undefined;
+
     try {
       const res = await fetch(`${apiUrl}/api/v1/threads/${targetThreadId}/messages`, {
         method: "POST",
@@ -752,7 +780,7 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
           modelId: selectedModelId,
           idempotencyKey,
           temperature: temperature,
-          systemPrompt: systemPrompt.trim() || undefined,
+          systemPrompt: effectiveSystemPrompt,
         }),
       });
 
@@ -1004,6 +1032,26 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
                     {models.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.name || m.id}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Workstation Target Selector */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-[#64748B] font-mono flex items-center gap-1">
+                    <Laptop2 className="w-3 h-3 text-indigo-400" />
+                    Target:
+                  </span>
+                  <select
+                    value={selectedDeviceId}
+                    onChange={(e) => setSelectedDeviceId(e.target.value)}
+                    className="px-2 py-1 rounded bg-[#121620] border border-[#1E2536] text-xs text-[#F0F4FC] focus:outline-none focus:border-indigo-500 max-w-[200px]"
+                  >
+                    <option value="">Cloud Engine</option>
+                    {pairedDevices.map((d) => (
+                      <option key={d.id} value={d.id} disabled={!d.isOnline}>
+                        {d.displayName} ({d.platform}) {d.isOnline ? "• Online" : "• Offline"}
                       </option>
                     ))}
                   </select>
@@ -1284,6 +1332,11 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
                       <span className="font-mono">
                         {selectedModelId ? `${selectedModelId}` : "No model"}
                       </span>
+                      {selectedDeviceId && (
+                        <span className="font-mono text-indigo-400">
+                          • 💻 {pairedDevices.find((d) => d.id === selectedDeviceId)?.displayName || "Workstation"}
+                        </span>
+                      )}
                       {activeRun && activeRun.outputTokens ? (
                         <span className="font-mono text-[#8B949E]">
                           • {activeRun.inputTokens} in / {activeRun.outputTokens} out

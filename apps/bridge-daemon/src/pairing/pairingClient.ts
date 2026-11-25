@@ -10,6 +10,7 @@ export interface PairingConfig {
   deviceId: string;
   displayName: string;
   publicKeyFingerprint: string;
+  workspaceId?: string;
   pairedAt: string;
 }
 

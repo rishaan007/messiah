@@ -180,7 +180,7 @@ describe("MESSIAH Phase 4A — Bridge Foundation & Secure Device Connectivity Te
       const body = JSON.parse(res.body);
       expect(body.success).toBe(true);
       expect(body.data.challengeId).toBeDefined();
-      expect(body.data.pairingCode).toMatch(/^MSH-[2-9A-Z]{4}-[2-9A-Z]{4}-[2-9A-Z]{4}$/);
+      expect(body.data.pairingCode).toMatch(/^MSH_[A-Za-z0-9_-]{43}$/);
       expect(body.data.expiresAt).toBeDefined();
 
       // Check database: challengeHash stored, plaintext code NOT stored
@@ -895,7 +895,7 @@ describe("MESSIAH Phase 4A — Bridge Foundation & Secure Device Connectivity Te
         headers: { Authorization: `Bearer ${userBToken}` },
       });
       expect(resB.statusCode).toBe(200);
-      expect(resB.json().data.devices).toHaveLength(0);
+      expect(resB.json().data).toHaveLength(0);
     });
 
     it("verifies no remote command execution or shell endpoints exist in Phase 4A (404)", async () => {

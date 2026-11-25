@@ -30,6 +30,33 @@ export const DEVICE_CONSTANTS = {
   SIGNING_PREFIX: "MESSIAH_DEVICE_AUTH",
 } as const;
 
+export const BRIDGE_CAPABILITIES = {
+  FILESYSTEM_LIST: "filesystem.list",
+  FILESYSTEM_READ: "filesystem.read",
+  FILESYSTEM_SEARCH: "filesystem.search",
+  FILESYSTEM_CREATE: "filesystem.create",
+  FILESYSTEM_MODIFY: "filesystem.modify",
+  FILESYSTEM_DELETE: "filesystem.delete",
+  MCP_DISCOVER: "mcp.discover",
+  MCP_INVOKE: "mcp.invoke",
+  PROCESS_RUN: "process.run",
+  PROCESS_INSPECT: "process.inspect",
+  AGENT_START: "agent.start",
+  AGENT_STATUS: "agent.status",
+  AGENT_CANCEL: "agent.cancel",
+} as const;
+
+export const TASK_CONSTANTS = {
+  DEFAULT_TIMEOUT_MS: 120000, // 2 minutes
+  MAX_TIMEOUT_MS: 600000, // 10 minutes
+  MAX_LOG_CHUNK_BYTES: 32768, // 32KB
+  SIGNING_PREFIX: "MESSIAH_TASK_AUTH",
+  APPROVAL_TTL_MS: 300000, // 5 minutes
+  MAX_OUTPUT_BYTES: 1048576, // 1MB output cap
+  DEFAULT_MAX_PROCESSES: 5,
+  DEFAULT_MAX_MEMORY_BYTES: 1073741824, // 1GB
+} as const;
+
 export const DEVICE_API_ROUTES = {
   connect: "/api/v1/devices/connect",
   list: "/api/v1/devices",
@@ -43,4 +70,13 @@ export const DEVICE_API_ROUTES = {
   pauseDevice: "/api/v1/devices/:deviceId/pause",
   resumeDevice: "/api/v1/devices/:deviceId/resume",
   revokeDevice: "/api/v1/devices/:deviceId/revoke",
+  deviceCapabilities: "/api/v1/devices/:deviceId/capabilities",
+  devicePolicy: "/api/v1/devices/:deviceId/policy",
+  deviceLocalMcp: "/api/v1/devices/:deviceId/mcp",
+  deviceTasks: "/api/v1/devices/:deviceId/tasks",
+  taskDetail: "/api/v1/devices/tasks/:taskId",
+  taskApprove: "/api/v1/devices/tasks/:taskId/approve",
+  taskReject: "/api/v1/devices/tasks/:taskId/reject",
+  taskCancel: "/api/v1/devices/tasks/:taskId/cancel",
+  taskLogs: "/api/v1/devices/tasks/:taskId/logs",
 } as const;

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import {
   Laptop2,
   CheckCircle2,
@@ -757,15 +758,28 @@ export default function DevicesSettingsPage() {
 
                           {/* Card Actions */}
                           <div className="flex items-center justify-between pt-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleViewDetails(device)}
-                              className="text-xs text-[#94A3B8] hover:text-white hover:bg-[#151822] px-2 h-7"
-                            >
-                              <Info className="mr-1.5 h-3.5 w-3.5" />
-                              Sessions & Keys
-                            </Button>
+                            <div className="flex items-center gap-1.5">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleViewDetails(device)}
+                                className="text-xs text-[#94A3B8] hover:text-white hover:bg-[#151822] px-2 h-7"
+                              >
+                                <Info className="mr-1.5 h-3.5 w-3.5" />
+                                Sessions & Keys
+                              </Button>
+
+                              <Link href={`/settings/devices/${device.id}/capabilities?workspaceId=${activeWorkspace?.id}`}>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-xs text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/20 px-2 h-7"
+                                >
+                                  <Shield className="mr-1.5 h-3.5 w-3.5" />
+                                  Capabilities
+                                </Button>
+                              </Link>
+                            </div>
 
                             {isOwnerOrAdmin && !isRevoked && (
                               <div className="flex items-center gap-1.5">

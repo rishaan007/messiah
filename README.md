@@ -1,7 +1,7 @@
 # MESSIAH — The Universal AI Agent Workspace
 
 > **Tagline:** One intelligence layer. Every agent. Every device.  
-> **Stage:** Phase 4A Complete — Bridge Foundation & Secure Device Connectivity  
+> **Stage:** Phase 4B Complete — Local Agent Execution, Workstation Sandboxing & Cross-Device Control  
 > **License:** UNLICENSED (Proprietary)
 
 ---
@@ -269,9 +269,10 @@ All provider management endpoints require `Authorization: Bearer <token>`:
 | **Phase 3A**  | **COMPLETE** | Remote MCP server connections (SDK v2), tool discovery, schema hashing, registry.    |
 | **Phase 3A.1**| **COMPLETE** | Transport security hardening, safeFetch Undici dispatcher, egress port restriction.  |
 | **Phase 3B**  | **COMPLETE** | Controlled MCP tool execution, multi-turn ReAct agent loop, human approvals (5m TTL).|
-| **Phase 4**   | Pending      | Local Agent Bridge daemon, outbound pairing, HITL approval broker.                   |
+| **Phase 4A**  | **COMPLETE** | Local Agent Bridge daemon, outbound WSS pairing, Ed25519 device identity.           |
+| **Phase 4B**  | **COMPLETE** | Workstation sandboxing, PathGuard containment, local stdio MCP, cross-device UI.     |
 | **Phase 5**   | Pending      | Multi-Agent Swarms, 3D WebGL Constellation with 2D fallback.                         |
 | **Phase 6**   | Pending      | Vector memory (pgvector), workflow automation DAG engine.                            |
 | **Phase 7**   | Pending      | Native cross-platform packaging, production security audit.                          |
 
-> **Strict Scope Notice**: In Phase 3B, the controlled MCP tool execution and multi-turn agent engine is fully operational and verified by 182 automated tests across the monorepo. Local agent bridges, multi-agent swarms, and vector memory remain strictly in subsequent phases.
+> **Current Verification Scope**: Phase 4B is complete and verified across all 10 monorepo packages with **263 automated tests passing** (`@messiah/server`: 136, `@messiah/mcp`: 43, `@messiah/providers`: 35, `@messiah/bridge-daemon`: 31, `@messiah/web`: 14, `@messiah/worker`: 4). Multi-agent swarms and vector memory remain in subsequent phases.

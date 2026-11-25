@@ -34,9 +34,11 @@ describe("Device Keystore Implementations", () => {
       expect(rawContent).not.toContain("BEGIN PRIVATE KEY");
       expect(rawContent).not.toContain(identity.privateKey);
 
-      // Must be an encrypted envelope
+      // Must be an encrypted envelope (v2 with hardened 600,000 iterations)
       const envelope = JSON.parse(rawContent);
-      expect(envelope.version).toBe(1);
+      expect(envelope.version).toBe(2);
+      expect(envelope.kdf).toBe("PBKDF2-HMAC-SHA512");
+      expect(envelope.iterations).toBe(600_000);
       expect(envelope.salt).toBeDefined();
       expect(envelope.iv).toBeDefined();
       expect(envelope.tag).toBeDefined();

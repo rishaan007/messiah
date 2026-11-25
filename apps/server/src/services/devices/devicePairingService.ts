@@ -22,24 +22,23 @@ export class DevicePairingError extends Error {
 
 export class DevicePairingService {
   /**
-   * Generates a high-entropy 256-bit pairing secret formatted as MSH-XXXX-XXXX-XXXX.
+   * Generates a high-entropy 256-bit pairing secret.
+   * Uses 32 cryptographically secure random bytes (256 bits).
+   * Formatted with a clean prefix followed by full 43-character Base64URL encoding (RFC 4648 §5).
+   * Total entropy: 256 bits.
    */
   private generatePairingCode(): string {
-    const chars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // Base32 crockford alphabet (unambiguous)
-    const bytes = crypto.randomBytes(16);
-    let code = "MSH";
-    for (let i = 0; i < 12; i++) {
-      if (i % 4 === 0) code += "-";
-      code += chars[bytes[i]! % chars.length];
-    }
-    return code;
+    const randomBytes = crypto.randomBytes(32);
+    const base64UrlToken = randomBytes.toString("base64url"); // Exactly 43 characters
+    return `MSH_${base64UrlToken}`;
   }
 
   /**
    * Computes SHA-256 hash of normalized pairing code.
+   * Preserves case for 256-bit Base64URL tokens while trimming whitespace.
    */
   public hashPairingCode(code: string): string {
-    const normalized = code.trim().toUpperCase();
+    const normalized = code.trim();
     return crypto.createHash("sha256").update(normalized).digest("hex");
   }
 
