@@ -211,8 +211,8 @@ describe("MESSIAH Phase 4B — Workstation Sandboxing, Bridge Task Execution & C
   });
 
   describe("1. Task Authorization & Cryptographic Envelope Signing", () => {
-    it("signs canonical task authorization payload with HMAC-SHA256", () => {
-      const envelope = taskAuthorizationService.createSignedTaskEnvelope({
+    it("signs canonical task authorization payload with per-device HMAC-SHA256", async () => {
+      const envelope = await taskAuthorizationService.createSignedTaskEnvelope({
         taskId: "11111111-1111-1111-1111-111111111111",
         deviceId,
         workspaceId,
@@ -231,24 +231,27 @@ describe("MESSIAH Phase 4B — Workstation Sandboxing, Bridge Task Execution & C
       expect(envelope.argumentsHash).toBeDefined();
     });
 
-    it("payload format contains canonical prefix and sorted resource scopes", () => {
-      const payload = taskAuthorizationService.formatTaskAuthPayload(
-        "task-123",
-        "req-456",
-        "device-789",
-        "workspace-abc",
-        "process.run",
-        ["/b", "/a"],
-        "argshash",
-        1000,
-        2000,
-        "nonce123",
-        "2026-08-01",
-        "approval-xyz"
-      );
+    it("payload format contains canonical V2 prefix, sorted scopes, and MCP bindings", () => {
+      const payload = taskAuthorizationService.formatTaskAuthPayload({
+        taskId: "task-123",
+        requestId: "req-456",
+        deviceId: "device-789",
+        workspaceId: "workspace-abc",
+        capability: "mcp.invoke",
+        resourceScopes: ["/b", "/a"],
+        argumentsHash: "argshash",
+        issuedAt: 1000,
+        expiresAt: 2000,
+        nonce: "nonce123",
+        policyVersion: "2026-08-01",
+        approvalReference: "approval-xyz",
+        mcpServerName: "git-mcp",
+        mcpSchemaHash: "schema123",
+        executableIdentity: "sha256:exe",
+      });
 
       expect(payload).toBe(
-        "MESSIAH_TASK_AUTH:task-123:req-456:device-789:workspace-abc:process.run:/a,/b:argshash:1000:2000:nonce123:2026-08-01:approval-xyz"
+        "MESSIAH_TASK_AUTH:V2:messiah-bridge:2026-08-01:task-123:req-456:device-789:workspace-abc:mcp.invoke:/a,/b:argshash:1000:2000:nonce123:2026-08-01:approval-xyz:git-mcp:schema123:sha256:exe"
       );
     });
   });
@@ -541,7 +544,7 @@ describe("MESSIAH Phase 4B — Workstation Sandboxing, Bridge Task Execution & C
           operation: "process.run",
           summary: "Remove build output directory",
           details: { command: "rm", args: ["-rf", "build"] },
-          argumentsHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          argumentsHash: json.data.argumentsHash,
           nonce: "nonce_1234567890",
           expiresAt: Date.now() + 300000,
         })
@@ -609,7 +612,8 @@ describe("MESSIAH Phase 4B — Workstation Sandboxing, Bridge Task Execution & C
         },
       });
 
-      const secondTaskId = JSON.parse(createRes.payload).data.id;
+      const secondTaskData = JSON.parse(createRes.payload).data;
+      const secondTaskId = secondTaskData.id;
 
       // 2. Report approval required
       activeWs!.send(
@@ -619,7 +623,7 @@ describe("MESSIAH Phase 4B — Workstation Sandboxing, Bridge Task Execution & C
           operation: "process.run",
           summary: "Drop database",
           details: { command: "dropdb" },
-          argumentsHash: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+          argumentsHash: secondTaskData.argumentsHash,
           nonce: "nonce_abcdef_123456",
           expiresAt: Date.now() + 300000,
         })
@@ -707,8 +711,99 @@ describe("MESSIAH Phase 4B — Workstation Sandboxing, Bridge Task Execution & C
       });
 
       expect(res.statusCode).toBe(200);
+      // Task transitions to CANCEL_REQUESTED until Bridge confirms process tree exit
+      expect(JSON.parse(res.payload).data.status).toBe("CANCEL_REQUESTED");
       const cancelFrame = await cancelPromise;
       expect(cancelFrame.taskId).toBe(cancelTaskId);
+
+      // Bridge confirms process tree termination
+      activeWs!.send(
+        JSON.stringify({
+          type: "device.task.cancelled",
+          taskId: cancelTaskId,
+          reason: "Process tree killed",
+          timestamp: Date.now(),
+        })
+      );
+
+      let confirmedStatus = "";
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 40));
+        const check = await app.inject({
+          method: "GET",
+          url: `/api/v1/devices/tasks/${cancelTaskId}?workspaceId=${workspaceId}`,
+          headers: { authorization: `Bearer ${ownerToken}` },
+        });
+        confirmedStatus = JSON.parse(check.payload).data?.status;
+        if (confirmedStatus === "CANCELLED") break;
+      }
+      expect(confirmedStatus).toBe("CANCELLED");
+    });
+
+    it("prevents double consumption when concurrent requests try to approve the same task", async () => {
+      const createRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/devices/${deviceId}/tasks`,
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: {
+          workspaceId,
+          deviceId,
+          capability: "process.run",
+          resourceScopes: ["/Users/dev/messiah-project"],
+          parameters: { executable: "npm", args: ["test"] },
+        },
+      });
+      const raceTaskId = JSON.parse(createRes.payload).data.id;
+
+      activeWs!.send(
+        JSON.stringify({
+          type: "device.approval.required",
+          taskId: raceTaskId,
+          operation: "process.run",
+          summary: "Run test suite",
+          details: { executable: "npm", args: ["test"] },
+          argumentsHash: JSON.parse(createRes.payload).data.argumentsHash,
+          nonce: "race_nonce_1234567890",
+          expiresAt: Date.now() + 300000,
+        })
+      );
+
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 40));
+        const check = await prisma.bridgeTaskApproval.findFirst({ where: { taskId: raceTaskId } });
+        if (check) break;
+      }
+
+      const [r1, r2] = await Promise.all([
+        app.inject({
+          method: "POST",
+          url: `/api/v1/devices/tasks/${raceTaskId}/approve`,
+          headers: { authorization: `Bearer ${ownerToken}` },
+          payload: { workspaceId, action: "approve" },
+        }),
+        app.inject({
+          method: "POST",
+          url: `/api/v1/devices/tasks/${raceTaskId}/approve`,
+          headers: { authorization: `Bearer ${ownerToken}` },
+          payload: { workspaceId, action: "approve" },
+        }),
+      ]);
+
+      const codes = [r1.statusCode, r2.statusCode].sort();
+      expect(codes).toEqual([200, 409]);
+    });
+
+    it("rotates per-device HMAC signing key via OWNER endpoint", async () => {
+      const rotateRes = await app.inject({
+        method: "POST",
+        url: `/api/v1/devices/${deviceId}/rotate-key`,
+        headers: { authorization: `Bearer ${ownerToken}` },
+        payload: { workspaceId },
+      });
+      expect(rotateRes.statusCode).toBe(200);
+      const body = JSON.parse(rotateRes.payload);
+      expect(body.success).toBe(true);
+      expect(body.data.keyVersion).toBeGreaterThan(1);
     });
 
     it("User from Workspace B cannot access or dispatch tasks on Workspace A device", async () => {

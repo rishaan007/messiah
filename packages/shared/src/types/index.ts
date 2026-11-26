@@ -615,6 +615,9 @@ export interface ServerAuthSuccessFrame {
   displayName: string;
   heartbeatIntervalMs: number;
   sessionExpiresAt: string;
+  taskSigningKey?: string;
+  taskKeyVersion?: number;
+  protocolVersion?: string;
 }
 
 export interface ServerAuthFailedFrame {
@@ -661,6 +664,11 @@ export interface DeviceTaskDispatchFrame {
   nonce: string;
   policyVersion: string;
   approvalReference?: string;
+  protocolVersion?: string;
+  serverAudience?: string;
+  mcpServerName?: string;
+  mcpSchemaHash?: string;
+  executableIdentity?: string;
   serverSignature: string;
 }
 
@@ -794,6 +802,13 @@ export interface BridgeTaskUnknownOutcomeFrame {
   timestamp: number;
 }
 
+export interface BridgeTaskCancelledFrame {
+  type: "device.task.cancelled";
+  taskId: string;
+  reason: string;
+  timestamp: number;
+}
+
 export interface BridgeMcpDiscoveredFrame {
   type: "device.mcp.discovered";
   servers: Array<{
@@ -837,6 +852,7 @@ export type DeviceToServerFrame =
   | BridgeTaskCompletedFrame
   | BridgeTaskFailedFrame
   | BridgeTaskUnknownOutcomeFrame
+  | BridgeTaskCancelledFrame
   | BridgeMcpDiscoveredFrame
   | BridgeCapabilitiesReportedFrame;
 

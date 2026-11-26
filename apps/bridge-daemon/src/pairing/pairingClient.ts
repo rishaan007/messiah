@@ -1,5 +1,5 @@
 import { DeviceIdentityManager, type DeviceIdentity } from "../identity/deviceIdentity.js";
-import { getPlatformKeystore, type IKeyStore } from "../keystore/index.js";
+import { getPlatformKeystore, SecureFileKeystore, type IKeyStore } from "../keystore/index.js";
 import { DEVICE_API_ROUTES, type ClaimPairingChallengeInput, type ClaimPairingChallengeResponse } from "@messiah/shared";
 import fs from "node:fs";
 import path from "node:path";
@@ -54,6 +54,7 @@ export class PairingClient {
 
   /**
    * Executes the pairing claim process against the server.
+   * Preserves exact case of Base64URL pairing token and never overwrites a locked vault.
    */
   public async pair(
     serverUrl: string,
@@ -62,16 +63,21 @@ export class PairingClient {
   ): Promise<{ identity: DeviceIdentity; config: PairingConfig; response: ClaimPairingChallengeResponse }> {
     const normalizedServerUrl = serverUrl.replace(/\/+$/, "");
 
-    // 1. Load or generate device identity
+    // 1. Load existing device identity, refusing to overwrite if an encrypted vault already exists but failed decryption
     let identity = await this.keystore.loadIdentity();
     if (!identity) {
+      if (this.keystore instanceof SecureFileKeystore && this.keystore.hasVaultFile()) {
+        throw new Error(
+          "Existing encrypted keystore could not be unlocked (wrong passphrase or corrupted vault). Refusing to overwrite existing identity."
+        );
+      }
       identity = DeviceIdentityManager.generateIdentity(displayName);
       await this.keystore.saveIdentity(identity);
     }
 
-    // 2. Prepare claim payload
+    // 2. Prepare claim payload (PRESERVE exact case for Base64URL MSH_<43-char> token)
     const claimPayload: ClaimPairingChallengeInput = {
-      pairingCode: pairingCode.trim().toUpperCase(),
+      pairingCode: pairingCode.trim(),
       displayName: identity.displayName,
       platform: identity.platform,
       architecture: identity.architecture,
@@ -102,7 +108,6 @@ export class PairingClient {
       throw new Error(`Pairing failed: ${errMsg}`);
     }
 
-    // Update identity with returned deviceId from server if needed
     if (responseBody.data.deviceId && responseBody.data.deviceId !== identity.deviceId) {
       identity.deviceId = responseBody.data.deviceId;
       await this.keystore.saveIdentity(identity);
@@ -118,15 +123,14 @@ export class PairingClient {
     };
     this.saveConfig(config);
 
-    return {
-      identity,
-      config,
-      response: responseBody.data,
-    };
+    return { identity, config, response: responseBody.data };
   }
 
+  /**
+   * Unpairs this workstation locally by deleting configuration and cryptographic keystore keys.
+   */
   public async unpair(): Promise<void> {
-    await this.keystore.deleteIdentity();
     this.deleteConfig();
+    await this.keystore.deleteIdentity();
   }
 }

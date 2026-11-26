@@ -1,39 +1,29 @@
-# Messiah Bridge Task & Authorization Protocol
+# Messiah Bridge Task Authorization & Lifecycle Protocol
 
-**Status**: Phase 4B Implemented & Verified  
+**Status**: Phase 4B Security Hardened & Verified  
 **Protocol Version**: `2026-08-01`  
 **Transport**: Outbound TLS 1.3 WebSocket (`/api/v1/devices/connect`)
 
 ---
 
-## 1. Cryptographic Task Authorization Envelope (`device.task.dispatch`)
+## 1. Per-Device Symmetric HMAC-SHA256 Authorization
 
-Workstations refuse unverified or unsigned instructions. Every task dispatched by Messiah Cloud carries a server signature (`TaskAuthorizationService`) bound to the exact operation parameters:
+Every paired `BridgeDevice` receives its own unique cryptographically random **256-bit symmetric HMAC-SHA256 key** (`taskSigningKey`).
+- **Key Lifecycle**:
+  - Provisioned on first authenticated WebSocket handshake (`TaskAuthorizationService.provisionOrGetDeviceSigningKey`), stored encrypted at rest in `bridge_devices.task_signing_key_encrypted` via AES-256-GCM bound with AAD (`messiah:device_hmac:<workspaceId>:<deviceId>:<keyVersion>`).
+  - Delivered to the Bridge over its Ed25519-authenticated TLS WebSocket session in `device.auth.success`.
+  - Rotated explicitly by workspace `OWNER` or `ADMIN` via `POST /api/v1/devices/:deviceId/rotate-key`, incrementing `taskKeyVersion` and terminating active sessions so old keys are invalidated immediately.
+  - There is **no global shared secret fallback**. HMAC-SHA256 is a symmetric Message Authentication Code (not an asymmetric signature).
 
-### Canonical Signing Payload:
+### Versioned Canonical Payload (`V2`):
 ```text
-MESSIAH_TASK_AUTH:<taskId>:<requestId>:<deviceId>:<workspaceId>:<capability>:<sortedResourceScopes>:<argumentsHash>:<issuedAt>:<expiresAt>:<nonce>:<policyVersion>:<approvalReference>
+MESSIAH_TASK_AUTH:V2:<serverAudience>:<protocolVersion>:<taskId>:<requestId>:<deviceId>:<workspaceId>:<capability>:<sortedResourceScopes>:<argumentsHash>:<issuedAt>:<expiresAt>:<nonce>:<policyVersion>:<approvalReference>:<mcpServerName>:<mcpSchemaHash>:<executableIdentity>
 ```
-
-- **`argumentsHash`**: SHA-256 digest of serialized parameters. Tampering with parameters invalidates verification immediately.
-- **`nonce`**: 128/256-bit cryptographic random string tracked by `ReplayGuard` to prohibit replay attacks.
-- **`expiresAt`**: Short TTL window after which stale frames are rejected locally.
-- **`approvalReference`**: Optional ID binding resumed tasks to explicit `BridgeTaskApproval` database records.
 
 ---
 
-## 2. WebSocket Lifecycle Frames
+## 2. Persistent Replay Guard & Immutable Approvals
 
-### Server -> Bridge:
-- `device.task.dispatch`: Signed task authorization envelope.
-- `device.task.cancel`: Terminates a running task and its child process tree.
-- `device.mcp.sync`: Requests immediate discovery refresh of local stdio MCP servers.
-
-### Bridge -> Server:
-- `device.capabilities.reported`: Reports supported capabilities, allowed roots, and OS sandbox profile on connect.
-- `device.mcp.discovered`: Reports local stdio MCP servers and tool schemas.
-- `device.task.accepted`: Confirms signature/nonce verification passed.
-- `device.task.started`: Marks task `RUNNING` with active sandbox profile metadata.
-- `device.task.log`: Streams sequenced `stdout`, `stderr`, or `system` chunks.
-- `device.approval.required`: Pauses execution (`AWAITING_APPROVAL`) and requests human review.
-- `device.task.completed` / `device.task.failed` / `device.task.unknown_outcome`: Final state transitions with exit code, duration, and structured output.
+- **Restart-Persistent Nonces (`ReplayGuard`)**: Seen nonces, consumed `approvalReference` IDs, and task lifecycle states persist atomically on disk (`replay_guard.json`, `0600` permissions) so captured unexpired tasks cannot be replayed after a Bridge restart.
+- **Single-Use Atomic Approvals**: `DeviceTaskService.handleApprovalDecision` executes inside an ACID PostgreSQL transaction verifying role (`OWNER`/`ADMIN`), `argumentsHash`, `deviceId`, `workspaceId`, `capability`, MCP `schemaHash`, and expiration, atomically locking via `updateMany({ where: { status: "PENDING" } })` (`409 ALREADY_DECIDED` on concurrent races) and writing a transactional `OutboxEvent`.
+- **Reliable Cancellation & Indeterminate Outcomes**: Cancellation transitions to `CANCEL_REQUESTED` until the Bridge kills the process tree and sends `device.task.cancelled`. Mid-execution disconnections transition active tasks to `UNKNOWN_OUTCOME` without automatic retry.

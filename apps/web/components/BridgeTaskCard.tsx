@@ -77,10 +77,24 @@ export function BridgeTaskCard({
             Failed
           </Badge>
         );
+      case "CANCEL_REQUESTED":
+        return (
+          <Badge variant="outline" className="border-amber-500/30 bg-amber-950/20 text-amber-300 text-xs">
+            <RotateCw className="mr-1 h-3 w-3 animate-spin" />
+            Stopping Process
+          </Badge>
+        );
+      case "UNKNOWN_OUTCOME":
+        return (
+          <Badge variant="outline" className="border-orange-500/30 bg-orange-950/20 text-orange-400 text-xs">
+            <AlertCircle className="mr-1 h-3 w-3" />
+            Unknown Outcome
+          </Badge>
+        );
       case "CANCELLED":
         return (
           <Badge variant="outline" className="border-zinc-500/30 bg-zinc-950/20 text-zinc-400 text-xs">
-            Cancelled
+            Cancelled (Confirmed)
           </Badge>
         );
       case "DISPATCHED":
@@ -152,9 +166,33 @@ export function BridgeTaskCard({
             {task.approval.summary}
           </div>
           {task.approval.details && Object.keys(task.approval.details).length > 0 && (
-            <pre className="rounded bg-[#07080B]/80 p-2 text-[11px] font-mono text-amber-300 overflow-x-auto border border-amber-500/20">
-              {JSON.stringify(task.approval.details, null, 2)}
-            </pre>
+            <div className="rounded bg-[#07080B]/80 p-2.5 text-[11px] font-mono text-amber-300 space-y-1 border border-amber-500/20">
+              {typeof (task.approval.details as any).executable === "string" && (
+                <div>
+                  <span className="text-[#94A3B8]">Executable:</span> {(task.approval.details as any).executable}{" "}
+                  {Array.isArray((task.approval.details as any).args) ? (task.approval.details as any).args.join(" ") : ""}
+                </div>
+              )}
+              {typeof (task.approval.details as any).cwd === "string" && (
+                <div>
+                  <span className="text-[#94A3B8]">Working Dir:</span> {(task.approval.details as any).cwd}
+                </div>
+              )}
+              {typeof (task.approval.details as any).mcpServerName === "string" && (
+                <div>
+                  <span className="text-[#94A3B8]">MCP Server / Tool:</span>{" "}
+                  {(task.approval.details as any).mcpServerName}.{(task.approval.details as any).toolName || ""}
+                </div>
+              )}
+              {typeof (task.approval.details as any).relativePath === "string" && (
+                <div>
+                  <span className="text-[#94A3B8]">Target File:</span> {(task.approval.details as any).relativePath}
+                </div>
+              )}
+              <pre className="overflow-x-auto pt-1 border-t border-amber-500/10 text-amber-200/80">
+                {JSON.stringify(task.approval.details, null, 2)}
+              </pre>
+            </div>
           )}
 
           {/* Action Buttons */}

@@ -19,8 +19,8 @@ export class DeviceTaskError extends Error {
 
 export class DeviceTaskService {
   /**
-   * Creates a new bridge task, generates a cryptographic server authorization signature,
-   * and dispatches it over WebSocket to the paired workstation.
+   * Creates a new bridge task, binds immutable execution parameters & MCP metadata,
+   * signs with the target device's unique HMAC key, and dispatches over WebSocket.
    */
   public async createAndDispatchTask(params: {
     workspaceId: string;
@@ -57,7 +57,6 @@ export class DeviceTaskService {
       throw new DeviceTaskError(400, "DEVICE_OFFLINE", "Device is currently offline. Cannot dispatch task.");
     }
 
-    // Check capability whitelist if reported
     if (device.capabilities && device.capabilities.length > 0) {
       if (!device.capabilities.includes(params.capability)) {
         throw new DeviceTaskError(
@@ -68,7 +67,6 @@ export class DeviceTaskService {
       }
     }
 
-    // Check policy restrictions
     const policy = device.devicePolicy as Record<string, unknown> | null;
     if (policy) {
       if (
@@ -83,11 +81,40 @@ export class DeviceTaskService {
       }
     }
 
+    // Resolve and bind MCP server identity / schema hash if capability is mcp.invoke
+    let mcpServerName: string | undefined;
+    let mcpSchemaHash: string | undefined;
+    let executableIdentity: string | undefined;
+
+    if (params.capability === "mcp.invoke") {
+      const serverNameParam = String(params.parameters?.serverName || "");
+      const mcpServer = await prisma.bridgeLocalMcpServer.findUnique({
+        where: { deviceId_serverName: { deviceId: params.deviceId, serverName: serverNameParam } },
+      });
+      if (!mcpServer || mcpServer.workspaceId !== params.workspaceId) {
+        throw new DeviceTaskError(404, "MCP_SERVER_NOT_FOUND", `Local MCP server '${serverNameParam}' is not registered.`);
+      }
+      if (mcpServer.status !== "ACTIVE") {
+        throw new DeviceTaskError(400, "MCP_SERVER_INACTIVE", `Local MCP server '${serverNameParam}' is ${mcpServer.status}.`);
+      }
+      if (mcpServer.schemaDriftDetected) {
+        throw new DeviceTaskError(
+          409,
+          "MCP_SCHEMA_DRIFT",
+          `Local MCP server '${serverNameParam}' tool schema changed since last approval. Re-confirmation required.`
+        );
+      }
+      mcpServerName = mcpServer.serverName;
+      mcpSchemaHash = mcpServer.approvedSchemaHash || mcpServer.schemaHash || undefined;
+      executableIdentity = mcpServer.pinnedExecutableSha256 || mcpServer.pinnedExecutablePath || mcpServer.command;
+    } else if (params.capability === "process.run") {
+      executableIdentity = String(params.parameters?.executable || "");
+    }
+
     const serializedParams = JSON.stringify(params.parameters);
     const argumentsHash = crypto.createHash("sha256").update(serializedParams).digest("hex");
     const expiresAt = new Date(Date.now() + TASK_CONSTANTS.DEFAULT_TIMEOUT_MS);
 
-    // Create BridgeTask record
     const task = await prisma.bridgeTask.create({
       data: {
         workspaceId: params.workspaceId,
@@ -104,17 +131,18 @@ export class DeviceTaskService {
       },
     });
 
-    // Create signed task envelope
-    const signedEnvelope = taskAuthorizationService.createSignedTaskEnvelope({
+    const signedEnvelope = await taskAuthorizationService.createSignedTaskEnvelope({
       taskId: task.id,
       deviceId: params.deviceId,
       workspaceId: params.workspaceId,
       capability: params.capability,
       resourceScopes: params.resourceScopes,
       parameters: params.parameters,
+      mcpServerName,
+      mcpSchemaHash,
+      executableIdentity,
     });
 
-    // Dispatch via WebSocket gateway
     const sent = deviceConnectionGateway.sendToDevice(params.deviceId, signedEnvelope);
     if (!sent) {
       await prisma.bridgeTask.update({
@@ -130,9 +158,6 @@ export class DeviceTaskService {
     return task;
   }
 
-  /**
-   * Retrieves single bridge task with approvals and execution details.
-   */
   public async getTask(taskId: string, workspaceId: string, userId: string) {
     const isMember = await workspaceService.isUserMember(workspaceId, userId);
     if (!isMember) {
@@ -161,9 +186,6 @@ export class DeviceTaskService {
     return task;
   }
 
-  /**
-   * Lists tasks in a workspace, optionally filtered by device.
-   */
   public async listTasks(workspaceId: string, deviceId: string | undefined, userId: string, limit = 50) {
     const isMember = await workspaceService.isUserMember(workspaceId, userId);
     if (!isMember) {
@@ -175,7 +197,7 @@ export class DeviceTaskService {
       where.deviceId = deviceId;
     }
 
-    const tasks = await prisma.bridgeTask.findMany({
+    return prisma.bridgeTask.findMany({
       where,
       orderBy: { createdAt: "desc" },
       take: Math.min(limit, 100),
@@ -189,13 +211,8 @@ export class DeviceTaskService {
         },
       },
     });
-
-    return tasks;
   }
 
-  /**
-   * Retrieves execution stream logs for a task.
-   */
   public async getTaskLogs(taskId: string, workspaceId: string, userId: string) {
     const isMember = await workspaceService.isUserMember(workspaceId, userId);
     if (!isMember) {
@@ -211,17 +228,16 @@ export class DeviceTaskService {
       throw new DeviceTaskError(404, "TASK_NOT_FOUND", "Task not found in this workspace.");
     }
 
-    const logs = await prisma.bridgeTaskLog.findMany({
+    return prisma.bridgeTaskLog.findMany({
       where: { taskId },
       orderBy: { sequence: "asc" },
     });
-
-    return logs;
   }
 
   /**
-   * Handles human approval or rejection of a paused bridge task operation.
-   * Requires OWNER or ADMIN role.
+   * Handles atomic single-use approval or rejection of a paused workstation operation.
+   * Performs immutable binding verification, conditional updateMany lock, and OutboxEvent persistence
+   * inside a single PostgreSQL ACID transaction.
    */
   public async handleApprovalDecision(
     taskId: string,
@@ -238,86 +254,176 @@ export class DeviceTaskService {
       throw new DeviceTaskError(403, "FORBIDDEN_ROLE", "Only workspace OWNER or ADMIN can approve bridge task actions.");
     }
 
-    const task = await prisma.bridgeTask.findUnique({
-      where: { id: taskId },
-      include: {
-        approval: true,
-      },
+    const txResult = await prisma.$transaction(async (tx) => {
+      const task = await tx.bridgeTask.findUnique({
+        where: { id: taskId },
+        include: { approval: true, device: true },
+      });
+
+      if (!task || task.workspaceId !== workspaceId) {
+        throw new DeviceTaskError(404, "TASK_NOT_FOUND", "Task not found in this workspace.");
+      }
+
+      const pendingApproval = task.approval;
+      if (!pendingApproval) {
+        throw new DeviceTaskError(400, "NO_PENDING_APPROVAL", "Task has no approval record.");
+      }
+      if (pendingApproval.status !== "PENDING") {
+        throw new DeviceTaskError(409, "ALREADY_DECIDED", `Approval was already ${pendingApproval.status}.`);
+      }
+      if (pendingApproval.expiresAt <= new Date()) {
+        await tx.bridgeTaskApproval.updateMany({
+          where: { id: pendingApproval.id, status: "PENDING" },
+          data: { status: "EXPIRED" },
+        });
+        await tx.bridgeTask.updateMany({
+          where: { id: task.id, status: "AWAITING_APPROVAL" },
+          data: { status: "EXPIRED", errorMessage: "Approval request expired.", completedAt: new Date() },
+        });
+        throw new DeviceTaskError(400, "APPROVAL_EXPIRED", "Approval request has expired.");
+      }
+
+      // Immutable binding checks
+      if (
+        pendingApproval.deviceId !== task.deviceId ||
+        pendingApproval.workspaceId !== task.workspaceId ||
+        pendingApproval.argumentsHash !== task.argumentsHash
+      ) {
+        await tx.bridgeTaskApproval.updateMany({
+          where: { id: pendingApproval.id, status: "PENDING" },
+          data: { status: "EXPIRED" },
+        });
+        throw new DeviceTaskError(409, "APPROVAL_BINDING_MISMATCH", "Task parameters or target binding changed since approval creation.");
+      }
+
+      if (pendingApproval.capability && pendingApproval.capability !== task.capability) {
+        throw new DeviceTaskError(409, "APPROVAL_BINDING_MISMATCH", "Capability changed since approval request.");
+      }
+
+      // If MCP execution, verify MCP server still exists and schema hash has not changed
+      if (task.capability === "mcp.invoke" && pendingApproval.mcpServerName) {
+        const mcpServer = await tx.bridgeLocalMcpServer.findUnique({
+          where: { deviceId_serverName: { deviceId: task.deviceId, serverName: pendingApproval.mcpServerName } },
+        });
+        if (!mcpServer || mcpServer.status !== "ACTIVE" || mcpServer.schemaDriftDetected) {
+          throw new DeviceTaskError(409, "MCP_SCHEMA_DRIFT", "Local MCP server state or schema drifted before approval.");
+        }
+        if (pendingApproval.mcpSchemaHash && mcpServer.schemaHash && mcpServer.schemaHash !== pendingApproval.mcpSchemaHash) {
+          throw new DeviceTaskError(409, "MCP_SCHEMA_DRIFT", "Local MCP tool schema changed after approval request.");
+        }
+      }
+
+      if (task.device.status !== "ACTIVE") {
+        throw new DeviceTaskError(400, "DEVICE_NOT_ACTIVE", "Device is no longer active.");
+      }
+
+      // Atomic conditional consumption (single-use guarantee under concurrent races)
+      const approvalUpdate = await tx.bridgeTaskApproval.updateMany({
+        where: {
+          id: pendingApproval.id,
+          status: "PENDING",
+          argumentsHash: task.argumentsHash,
+          expiresAt: { gt: new Date() },
+        },
+        data: {
+          status: action === "approve" ? "APPROVED" : "DENIED",
+          decidedByUserId: userId,
+          decidedAt: new Date(),
+          rejectionReason: action === "reject" ? rejectionReason || "Rejected by administrator" : null,
+        },
+      });
+
+      if (approvalUpdate.count !== 1) {
+        throw new DeviceTaskError(409, "ALREADY_DECIDED", "Approval has already been decided or expired.");
+      }
+
+      const taskUpdate = await tx.bridgeTask.updateMany({
+        where: { id: task.id, status: "AWAITING_APPROVAL" },
+        data:
+          action === "approve"
+            ? { status: "DISPATCHED" }
+            : {
+                status: "FAILED",
+                errorMessage: rejectionReason || "Operation rejected by administrator",
+                completedAt: new Date(),
+              },
+      });
+
+      if (taskUpdate.count !== 1) {
+        throw new DeviceTaskError(409, "INVALID_TASK_STATE", "Task is no longer awaiting approval.");
+      }
+
+      // Create durable transactional OutboxEvent for dispatch
+      const outboxEvent = await tx.outboxEvent.create({
+        data: {
+          eventType: action === "approve" ? "bridge.task.resume" : "bridge.task.cancel",
+          aggregateType: "bridge_task",
+          aggregateId: task.id,
+          payload: {
+            taskId: task.id,
+            deviceId: task.deviceId,
+            workspaceId: task.workspaceId,
+            approvalReference: pendingApproval.id,
+            decidedByUserId: userId,
+            action,
+            rejectionReason: rejectionReason || null,
+          },
+          status: "PENDING",
+        },
+      });
+
+      const updatedTask = await tx.bridgeTask.findUniqueOrThrow({ where: { id: task.id } });
+      return {
+        updatedTask,
+        pendingApproval,
+        outboxEventId: outboxEvent.id,
+      };
     });
 
-    if (!task || task.workspaceId !== workspaceId) {
-      throw new DeviceTaskError(404, "TASK_NOT_FOUND", "Task not found in this workspace.");
-    }
-
-    const pendingApproval = task.approval;
-    if (!pendingApproval || pendingApproval.status !== "PENDING") {
-      throw new DeviceTaskError(400, "NO_PENDING_APPROVAL", "Task has no pending approval requests.");
-    }
-
+    // Post-commit dispatch over active WSS gateway
     if (action === "approve") {
-      // Transition approval to APPROVED
-      await prisma.bridgeTaskApproval.update({
-        where: { id: pendingApproval.id },
-        data: {
-          status: "APPROVED",
-          decidedByUserId: userId,
-          decidedAt: new Date(),
-        },
+      const envelope = await taskAuthorizationService.createSignedTaskEnvelope({
+        taskId: txResult.updatedTask.id,
+        deviceId: txResult.updatedTask.deviceId,
+        workspaceId: txResult.updatedTask.workspaceId,
+        capability: txResult.updatedTask.capability,
+        resourceScopes: txResult.updatedTask.resourceScopes,
+        parameters: txResult.updatedTask.parameters as Record<string, unknown>,
+        approvalReference: txResult.pendingApproval.id,
+        mcpServerName: txResult.pendingApproval.mcpServerName || undefined,
+        mcpSchemaHash: txResult.pendingApproval.mcpSchemaHash || undefined,
+        executableIdentity: txResult.pendingApproval.executableIdentity || undefined,
       });
 
-      // Update task to DISPATCHED
-      const updatedTask = await prisma.bridgeTask.update({
-        where: { id: task.id },
-        data: { status: "DISPATCHED" },
-      });
-
-      // Generate signed task envelope with approval reference
-      const envelope = taskAuthorizationService.createSignedTaskEnvelope({
-        taskId: task.id,
-        deviceId: task.deviceId,
-        workspaceId: task.workspaceId,
-        capability: task.capability,
-        resourceScopes: task.resourceScopes,
-        parameters: task.parameters as Record<string, unknown>,
-        approvalReference: pendingApproval.id,
-      });
-
-      deviceConnectionGateway.sendToDevice(task.deviceId, envelope);
-      return updatedTask;
+      const sent = deviceConnectionGateway.sendToDevice(txResult.updatedTask.deviceId, envelope);
+      if (sent) {
+        await prisma.outboxEvent.update({
+          where: { id: txResult.outboxEventId },
+          data: { status: "PROCESSED", processedAt: new Date() },
+        }).catch(() => {});
+      }
     } else {
-      // Rejection
-      await prisma.bridgeTaskApproval.update({
-        where: { id: pendingApproval.id },
-        data: {
-          status: "DENIED",
-          decidedByUserId: userId,
-          decidedAt: new Date(),
-          rejectionReason: rejectionReason || "Rejected by administrator",
-        },
-      });
-
-      const updatedTask = await prisma.bridgeTask.update({
-        where: { id: task.id },
-        data: {
-          status: "FAILED",
-          errorMessage: rejectionReason || "Operation rejected by administrator",
-          completedAt: new Date(),
-        },
-      });
-
       const cancelFrame: DeviceTaskCancelFrame = {
         type: "device.task.cancel",
-        taskId: task.id,
+        taskId: txResult.updatedTask.id,
         reason: rejectionReason || "Rejected by administrator",
       };
-      deviceConnectionGateway.sendToDevice(task.deviceId, cancelFrame);
-
-      return updatedTask;
+      const sent = deviceConnectionGateway.sendToDevice(txResult.updatedTask.deviceId, cancelFrame);
+      if (sent) {
+        await prisma.outboxEvent.update({
+          where: { id: txResult.outboxEventId },
+          data: { status: "PROCESSED", processedAt: new Date() },
+        }).catch(() => {});
+      }
     }
+
+    return txResult.updatedTask;
   }
 
   /**
-   * Cancels a running or pending bridge task.
+   * Requests cancellation of an active bridge task.
+   * Transitions RUNNING/DISPATCHED/ACCEPTED tasks to CANCEL_REQUESTED (not CANCELLED)
+   * until the Bridge confirms termination of the process tree.
    */
   public async cancelTask(taskId: string, workspaceId: string, userId: string, reason = "Cancelled by user") {
     const isMember = await workspaceService.isUserMember(workspaceId, userId);
@@ -337,17 +443,39 @@ export class DeviceTaskService {
       task.status === "SUCCEEDED" ||
       task.status === "FAILED" ||
       task.status === "CANCELLED" ||
-      task.status === "EXPIRED"
+      task.status === "EXPIRED" ||
+      task.status === "UNKNOWN_OUTCOME"
     ) {
       return task;
+    }
+
+    // If queued and never dispatched, safe to mark CANCELLED immediately
+    if (task.status === "QUEUED") {
+      return prisma.bridgeTask.update({
+        where: { id: taskId },
+        data: { status: "CANCELLED", errorMessage: reason, completedAt: new Date() },
+      });
+    }
+
+    // Otherwise mark CANCEL_REQUESTED until Bridge confirms process tree termination
+    const isOnline = deviceConnectionGateway.isDeviceConnected(task.deviceId);
+    if (!isOnline && (task.status === "RUNNING" || task.status === "ACCEPTED")) {
+      // Cannot reach device to terminate running side-effect operation -> UNKNOWN_OUTCOME
+      return prisma.bridgeTask.update({
+        where: { id: taskId },
+        data: {
+          status: "UNKNOWN_OUTCOME",
+          errorMessage: "Device disconnected before cancellation could terminate running process.",
+          completedAt: new Date(),
+        },
+      });
     }
 
     const updated = await prisma.bridgeTask.update({
       where: { id: taskId },
       data: {
-        status: "CANCELLED",
+        status: "CANCEL_REQUESTED",
         errorMessage: reason,
-        completedAt: new Date(),
       },
     });
 

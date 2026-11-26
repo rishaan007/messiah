@@ -54,6 +54,7 @@ describe("Phase 4B: Workstation Sandboxing & Process Runner", () => {
         AWS_SECRET_ACCESS_KEY: "secret_aws",
         CUSTOM_SAFE_VAR: "allowed_value",
       },
+      explicitAllowedEnvKeys: ["CUSTOM_SAFE_VAR"],
     });
 
     expect(res.exitCode).toBe(0);
@@ -75,7 +76,7 @@ describe("Phase 4B: Workstation Sandboxing & Process Runner", () => {
     });
 
     expect(res.exitCode).toBe(124);
-    expect(res.stderr).toContain("timed out after 500ms");
+    expect(res.stderr).toContain("TIMEOUT_EXCEEDED (500ms)");
     expect(res.truncated).toBe(true);
   });
 

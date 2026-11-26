@@ -51,7 +51,7 @@ describe("Phase 4B: Local Filesystem Security & Safe Operations", () => {
 
         expect(() => {
           PathGuard.resolveAndValidate([testRoot], testRoot, "leak-link");
-        }).toThrowError(/Symlink resolves to/i);
+        }).toThrowError(/symlink|reparse point/i);
       } catch (err: any) {
         if (err.code === "EPERM") {
           // Windows unprivileged symlink restriction

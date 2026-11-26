@@ -586,12 +586,14 @@ model BridgeDevice {
   bridgeVersion        String                    @map("bridge_version") @db.VarChar(64)
   publicKey            String                    @map("public_key") @db.Text
   publicKeyFingerprint String                    @map("public_key_fingerprint") @db.VarChar(128)
-  protocolVersion      String                    @default("2026-08-01") @map("protocol_version") @db.VarChar(32)
-  status               DeviceStatus              @default(PENDING_APPROVAL)
-  allowedRoots         String[]                  @default([]) @map("allowed_roots")
-  capabilities         String[]                  @default([])
-  devicePolicy         Json?                     @map("device_policy") @db.JsonB
-  lastSeenAt           DateTime?                 @map("last_seen_at") @db.Timestamptz(6)
+  protocolVersion          String                    @default("2026-08-01") @map("protocol_version") @db.VarChar(32)
+  status                   DeviceStatus              @default(PENDING_APPROVAL)
+  allowedRoots             String[]                  @default([]) @map("allowed_roots")
+  capabilities             String[]                  @default([])
+  devicePolicy             Json?                     @map("device_policy") @db.JsonB
+  taskSigningKeyEncrypted  String?                   @map("task_signing_key_encrypted") @db.Text
+  taskKeyVersion           Int                       @default(1) @map("task_key_version")
+  lastSeenAt               DateTime?                 @map("last_seen_at") @db.Timestamptz(6)
   lastConnectedAt      DateTime?                 @map("last_connected_at") @db.Timestamptz(6)
   pairedAt             DateTime?                 @map("paired_at") @db.Timestamptz(6)
   revokedAt            DateTime?                 @map("revoked_at") @db.Timestamptz(6)
@@ -696,10 +698,17 @@ model BridgeLocalMcpServer {
   args             String[]             @default([])
   cwd              String?              @db.Text
   env              Json?                @db.JsonB
-  status           LocalMcpServerStatus @default(ACTIVE)
-  schemaHash       String?              @map("schema_hash") @db.VarChar(64)
-  tools            Json?                @db.JsonB
-  lastDiscoveredAt DateTime?            @map("last_discovered_at") @db.Timestamptz(6)
+  status                LocalMcpServerStatus @default(ACTIVE)
+  schemaHash            String?              @map("schema_hash") @db.VarChar(64)
+  approvedSchemaHash    String?              @map("approved_schema_hash") @db.VarChar(64)
+  pinnedExecutablePath  String?              @map("pinned_executable_path") @db.Text
+  pinnedExecutableSha256 String?             @map("pinned_executable_sha256") @db.VarChar(64)
+  packageName           String?              @map("package_name") @db.VarChar(128)
+  packageVersion        String?              @map("package_version") @db.VarChar(64)
+  userConfirmedAt       DateTime?            @map("user_confirmed_at") @db.Timestamptz(6)
+  schemaDriftDetected   Boolean              @default(false) @map("schema_drift_detected")
+  tools                 Json?                @db.JsonB
+  lastDiscoveredAt      DateTime?            @map("last_discovered_at") @db.Timestamptz(6)
   createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
 
@@ -761,6 +770,11 @@ model BridgeTaskApproval {
   summary           String             @db.Text
   details           Json               @default("{}") @db.JsonB
   argumentsHash     String             @map("arguments_hash") @db.VarChar(64)
+  capability        String?            @db.VarChar(64)
+  resourceScopes    String[]           @default([]) @map("resource_scopes")
+  executableIdentity String?           @map("executable_identity") @db.Text
+  mcpServerName     String?            @map("mcp_server_name") @db.VarChar(128)
+  mcpSchemaHash     String?            @map("mcp_schema_hash") @db.VarChar(64)
   nonce             String             @db.VarChar(64)
   expiresAt         DateTime           @map("expires_at") @db.Timestamptz(6)
   decidedAt         DateTime?          @map("decided_at") @db.Timestamptz(6)

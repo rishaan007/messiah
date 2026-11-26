@@ -472,6 +472,50 @@ export const deviceRoutes: FastifyPluginAsync = async (fastify) => {
   );
 
   /**
+   * POST /api/v1/devices/:deviceId/rotate-key
+   * Rotates a device's unique 256-bit HMAC task signing key and terminates current WSS session
+   * so the bridge picks up the new versioned key on reconnect.
+   */
+  fastify.post<{ Params: { deviceId: string }; Body: unknown }>(
+    "/devices/:deviceId/rotate-key",
+    { preHandler: [fastify.authenticate] },
+    async (request, reply) => {
+      const parseResult = DeviceActionSchema.safeParse(request.body);
+      if (!parseResult.success) {
+        return reply.code(422).send({
+          success: false,
+          error: {
+            code: "VALIDATION_ERROR",
+            message: parseResult.error.errors[0]?.message || "Invalid request payload",
+          },
+        });
+      }
+
+      try {
+        const result = await deviceManagementService.rotateDeviceTaskKey(
+          request.params.deviceId,
+          parseResult.data.workspaceId,
+          request.user.id
+        );
+        deviceConnectionGateway.disconnectDevice(
+          request.params.deviceId,
+          "Device HMAC signing key rotated by administrator",
+          4000
+        );
+        return reply.code(200).send({ success: true, data: result });
+      } catch (err: unknown) {
+        if (err instanceof DeviceManagementError) {
+          return reply.code(err.statusCode).send({
+            success: false,
+            error: { code: err.code, message: err.message },
+          });
+        }
+        throw err;
+      }
+    }
+  );
+
+  /**
    * GET /api/v1/devices/:deviceId/capabilities
    * Fetches capabilities, allowed project roots, policy, and registered local MCP servers.
    */

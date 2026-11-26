@@ -15,6 +15,8 @@ import {
   type DeviceToServerFrame,
 } from "@messiah/shared";
 import { devicePresenceService } from "./devicePresenceService.js";
+import { taskAuthorizationService } from "./taskAuthorizationService.js";
+import { LogRedactor } from "@messiah/bridge-daemon";
 
 interface PendingChallenge {
   nonce: string;
@@ -88,6 +90,19 @@ export class DeviceConnectionGateway {
           where: { id: authenticatedDeviceId },
           data: { lastSeenAt: new Date() },
         }).catch(() => {});
+
+        // Any task actively RUNNING, ACCEPTED, or CANCEL_REQUESTED when socket dropped transitions to UNKNOWN_OUTCOME
+        await prisma.bridgeTask.updateMany({
+          where: {
+            deviceId: authenticatedDeviceId,
+            status: { in: ["RUNNING", "ACCEPTED", "CANCEL_REQUESTED"] },
+          },
+          data: {
+            status: "UNKNOWN_OUTCOME",
+            errorMessage: "Workstation disconnected mid-execution; operation side-effect outcome is indeterminate and will not be auto-retried.",
+            completedAt: new Date(),
+          },
+        }).catch(() => {});
       }
 
       if (socket.readyState === socket.OPEN || socket.readyState === socket.CONNECTING) {
@@ -149,8 +164,9 @@ export class DeviceConnectionGateway {
       }, DEVICE_CONSTANTS.HEARTBEAT_TIMEOUT_MS);
     };
 
-    // 3. Handle incoming frames
-    socket.on("message", async (raw: Buffer | string) => {
+    // 3. Handle incoming frames strictly sequentially per socket to prevent out-of-order DB updates
+    let messageChain = Promise.resolve();
+    const processIncomingMessage = async (raw: Buffer | string) => {
       try {
         if (raw.length > DEVICE_CONSTANTS.MAX_FRAME_SIZE_BYTES) {
           const errFrame: ServerProtocolErrorFrame = {
@@ -343,7 +359,10 @@ export class DeviceConnectionGateway {
             cleanup: () => cleanupAndClose("Superseded by new connection", 4409),
           });
 
-          // Send auth success
+          // Provision or retrieve unique per-device 256-bit HMAC task signing key
+          const signingKeyInfo = await taskAuthorizationService.provisionOrGetDeviceSigningKey(device.id);
+
+          // Send auth success with per-device HMAC signing key over authenticated TLS/WSS channel
           const successFrame: ServerAuthSuccessFrame = {
             type: "device.auth.success",
             sessionId: session.id,
@@ -351,6 +370,9 @@ export class DeviceConnectionGateway {
             displayName: device.displayName,
             heartbeatIntervalMs: DEVICE_CONSTANTS.HEARTBEAT_INTERVAL_MS,
             sessionExpiresAt: session.expiresAt.toISOString(),
+            taskSigningKey: signingKeyInfo.key,
+            taskKeyVersion: signingKeyInfo.version,
+            protocolVersion: DEVICE_CONSTANTS.PROTOCOL_VERSION,
           };
           sendFrame(successFrame);
 
@@ -401,11 +423,11 @@ export class DeviceConnectionGateway {
             break;
           }
 
-          // Phase 4B: Device Task Execution & Capability Frames
+          // Phase 4B: Device Task Execution & Capability Frames (forward-only transitions)
           case "device.task.accepted": {
             resetHeartbeatWatchdog();
-            await prisma.bridgeTask.update({
-              where: { id: frame.taskId },
+            await prisma.bridgeTask.updateMany({
+              where: { id: frame.taskId, status: { in: ["QUEUED", "DISPATCHED"] } },
               data: { status: "ACCEPTED" },
             }).catch(() => {});
             break;
@@ -413,8 +435,8 @@ export class DeviceConnectionGateway {
 
           case "device.task.started": {
             resetHeartbeatWatchdog();
-            await prisma.bridgeTask.update({
-              where: { id: frame.taskId },
+            await prisma.bridgeTask.updateMany({
+              where: { id: frame.taskId, status: { in: ["QUEUED", "DISPATCHED", "ACCEPTED"] } },
               data: {
                 status: "RUNNING",
                 startedAt: new Date(frame.timestamp),
@@ -435,7 +457,7 @@ export class DeviceConnectionGateway {
                 taskId: frame.taskId,
                 sequence: frame.sequence,
                 stream: frame.stream,
-                chunk: frame.chunk,
+                chunk: LogRedactor.redact(frame.chunk),
                 timestamp: new Date(frame.timestamp),
               },
             }).catch(() => {});
@@ -445,16 +467,30 @@ export class DeviceConnectionGateway {
           case "device.approval.required": {
             resetHeartbeatWatchdog();
             const task = await prisma.bridgeTask.findUnique({ where: { id: frame.taskId } });
-            if (task) {
+            if (task && task.deviceId === authenticatedDeviceId) {
+              const details = (frame.details || {}) as Record<string, unknown>;
               await prisma.bridgeTaskApproval.create({
                 data: {
                   taskId: task.id,
                   workspaceId: task.workspaceId,
                   deviceId: task.deviceId,
+                  requestedByUserId: task.userId,
                   operation: frame.operation,
                   summary: frame.summary,
                   details: frame.details as any,
                   argumentsHash: frame.argumentsHash,
+                  capability: task.capability,
+                  resourceScopes: task.resourceScopes,
+                  executableIdentity:
+                    typeof details.executable === "string" ? details.executable : undefined,
+                  mcpServerName:
+                    typeof details.mcpServerName === "string"
+                      ? details.mcpServerName
+                      : typeof details.serverName === "string"
+                      ? details.serverName
+                      : undefined,
+                  mcpSchemaHash:
+                    typeof details.mcpSchemaHash === "string" ? details.mcpSchemaHash : undefined,
                   nonce: frame.nonce,
                   expiresAt: new Date(frame.expiresAt),
                 },
@@ -510,6 +546,19 @@ export class DeviceConnectionGateway {
             break;
           }
 
+          case "device.task.cancelled": {
+            resetHeartbeatWatchdog();
+            await prisma.bridgeTask.update({
+              where: { id: frame.taskId },
+              data: {
+                status: "CANCELLED",
+                errorMessage: frame.reason,
+                completedAt: new Date(frame.timestamp),
+              },
+            }).catch(() => {});
+            break;
+          }
+
           case "device.capabilities.reported": {
             resetHeartbeatWatchdog();
             await prisma.bridgeDevice.update({
@@ -528,6 +577,19 @@ export class DeviceConnectionGateway {
             const dev = await prisma.bridgeDevice.findUnique({ where: { id: authenticatedDeviceId } });
             if (dev) {
               for (const s of frame.servers) {
+                const existing = await prisma.bridgeLocalMcpServer.findUnique({
+                  where: {
+                    deviceId_serverName: {
+                      deviceId: dev.id,
+                      serverName: s.name,
+                    },
+                  },
+                });
+                const drift = Boolean(
+                  existing?.approvedSchemaHash &&
+                    s.schemaHash &&
+                    existing.approvedSchemaHash !== s.schemaHash
+                );
                 await prisma.bridgeLocalMcpServer.upsert({
                   where: {
                     deviceId_serverName: {
@@ -543,6 +605,8 @@ export class DeviceConnectionGateway {
                     args: s.args,
                     status: s.status,
                     schemaHash: s.schemaHash,
+                    approvedSchemaHash: s.schemaHash,
+                    schemaDriftDetected: false,
                     tools: s.tools as any,
                     lastDiscoveredAt: new Date(),
                   },
@@ -551,6 +615,7 @@ export class DeviceConnectionGateway {
                     args: s.args,
                     status: s.status,
                     schemaHash: s.schemaHash,
+                    schemaDriftDetected: drift,
                     tools: s.tools as any,
                     lastDiscoveredAt: new Date(),
                   },
@@ -571,6 +636,10 @@ export class DeviceConnectionGateway {
         };
         sendFrame(errFrame);
       }
+    };
+
+    socket.on("message", (raw: Buffer | string) => {
+      messageChain = messageChain.then(() => processIncomingMessage(raw)).catch(() => {});
     });
 
     socket.on("close", () => {

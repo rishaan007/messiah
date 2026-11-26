@@ -272,6 +272,9 @@ export const ServerAuthSuccessFrameSchema = z.object({
   displayName: z.string(),
   heartbeatIntervalMs: z.number().int().positive(),
   sessionExpiresAt: z.string(),
+  taskSigningKey: z.string().optional(),
+  taskKeyVersion: z.number().int().positive().optional(),
+  protocolVersion: z.string().optional(),
 });
 
 export const ServerAuthFailedFrameSchema = z.object({
@@ -318,6 +321,11 @@ export const DeviceTaskDispatchFrameSchema = z.object({
   nonce: z.string().min(16),
   policyVersion: z.string(),
   approvalReference: z.string().optional(),
+  protocolVersion: z.string().optional(),
+  serverAudience: z.string().optional(),
+  mcpServerName: z.string().optional(),
+  mcpSchemaHash: z.string().optional(),
+  executableIdentity: z.string().optional(),
   serverSignature: z.string().min(32),
 });
 
@@ -452,6 +460,13 @@ export const BridgeTaskUnknownOutcomeFrameSchema = z.object({
   timestamp: z.number().int(),
 });
 
+export const BridgeTaskCancelledFrameSchema = z.object({
+  type: z.literal("device.task.cancelled"),
+  taskId: z.string().uuid(),
+  reason: z.string(),
+  timestamp: z.number().int(),
+});
+
 export const BridgeMcpDiscoveredFrameSchema = z.object({
   type: z.literal("device.mcp.discovered"),
   servers: z.array(
@@ -499,6 +514,7 @@ export const DeviceToServerFrameSchema = z.discriminatedUnion("type", [
   BridgeTaskCompletedFrameSchema,
   BridgeTaskFailedFrameSchema,
   BridgeTaskUnknownOutcomeFrameSchema,
+  BridgeTaskCancelledFrameSchema,
   BridgeMcpDiscoveredFrameSchema,
   BridgeCapabilitiesReportedFrameSchema,
 ]);
@@ -547,6 +563,11 @@ export const RegisterLocalMcpServerSchema = z.object({
   args: z.array(z.string()).default([]),
   cwd: z.string().optional(),
   env: z.record(z.string()).optional(),
+  pinnedExecutablePath: z.string().optional(),
+  pinnedExecutableSha256: z.string().optional(),
+  packageName: z.string().optional(),
+  packageVersion: z.string().optional(),
+  userConfirmed: z.boolean().default(true),
 });
 
 

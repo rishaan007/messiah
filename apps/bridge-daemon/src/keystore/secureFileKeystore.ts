@@ -5,26 +5,38 @@ import crypto from "node:crypto";
 import type { IKeyStore } from "./keystoreInterface.js";
 import type { DeviceIdentity } from "../identity/deviceIdentity.js";
 
+export interface SecureFileKeystoreOptions {
+  requirePassphrase?: boolean;
+}
+
 export class SecureFileKeystore implements IKeyStore {
   public readonly name = "Encrypted Local Keystore (AES-256-GCM)";
   private readonly storageDir: string;
   private readonly vaultPath: string;
+  private readonly requirePassphrase: boolean;
 
-  constructor(customDir?: string) {
+  constructor(customDir?: string, options?: SecureFileKeystoreOptions) {
     this.storageDir = customDir || path.join(os.homedir(), ".messiah", "bridge");
     this.vaultPath = path.join(this.storageDir, "device.vault");
+    this.requirePassphrase = Boolean(options?.requirePassphrase);
   }
 
-  /**
-   * Derives a machine/user-unique 256-bit encryption key using PBKDF2-HMAC-SHA512.
-   * Hardened to 600,000 iterations in accordance with OWASP Password Storage Guidelines.
-   * Combines user-specified passphrase (if set via MESSIAH_VAULT_PASSPHRASE), user UID/SID,
-   * host-specific entropy, and a high-entropy 32-byte cryptographically random salt.
-   *
-   * SECURITY WARNING: Software-based file encryption protects credentials at rest against offline
-   * disk theft, but cannot defend against malicious code running under the same OS user account
-   * with memory-inspection or process-injection capabilities.
-   */
+  public hasVaultFile(): boolean {
+    return fs.existsSync(this.vaultPath);
+  }
+
+  public getVaultPath(): string {
+    return this.vaultPath;
+  }
+
+  private assertPassphraseIfRequired(): void {
+    if (this.requirePassphrase && !process.env.MESSIAH_VAULT_PASSPHRASE) {
+      throw new Error(
+        "PASSPHRASE_REQUIRED: Headless keystore requires MESSIAH_VAULT_PASSPHRASE environment variable; refusing to encrypt with empty passphrase."
+      );
+    }
+  }
+
   private deriveKey(salt: Buffer, iterations = 600_000, digest = "sha512"): Buffer {
     const userPassphrase = process.env.MESSIAH_VAULT_PASSPHRASE || "";
     const machineEntropy = [
@@ -37,19 +49,15 @@ export class SecureFileKeystore implements IKeyStore {
       os.cpus()[0]?.model || "cpu-generic",
     ].join(":");
 
-    return crypto.pbkdf2Sync(
-      machineEntropy,
-      salt,
-      iterations,
-      32,
-      digest
-    );
+    return crypto.pbkdf2Sync(machineEntropy, salt, iterations, 32, digest);
   }
 
   public async loadIdentity(): Promise<DeviceIdentity | null> {
     if (!fs.existsSync(this.vaultPath)) {
       return null;
     }
+
+    this.assertPassphraseIfRequired();
 
     try {
       const raw = fs.readFileSync(this.vaultPath, "utf-8");
@@ -64,12 +72,10 @@ export class SecureFileKeystore implements IKeyStore {
       const tag = Buffer.from(envelope.tag, "hex");
       const version = envelope.version || 1;
 
-      // Backward compatibility for existing v1 envelopes (100,000 iterations sha256)
       const iterations = envelope.iterations || (version === 1 ? 100_000 : 600_000);
       const digest = envelope.digest || (version === 1 ? "sha256" : "sha512");
       const aad = version === 1 ? "MESSIAH_DEVICE_KEYSTORE_V1" : "MESSIAH_DEVICE_KEYSTORE_V2";
 
-      // In v1, deriveKey did not include os.userInfo().username or passphrase
       let key: Buffer;
       if (version === 1 && !envelope.iterations) {
         const legacyMachineEntropy = [
@@ -99,13 +105,15 @@ export class SecureFileKeystore implements IKeyStore {
   }
 
   public async saveIdentity(identity: DeviceIdentity): Promise<void> {
+    this.assertPassphraseIfRequired();
+
     if (!fs.existsSync(this.storageDir)) {
       fs.mkdirSync(this.storageDir, { recursive: true, mode: 0o700 });
     }
 
-    const salt = crypto.randomBytes(32); // 32-byte cryptographic salt
+    const salt = crypto.randomBytes(32);
     const iv = crypto.randomBytes(12);
-    const iterations = 600_000; // OWASP recommendation for PBKDF2-HMAC-SHA512
+    const iterations = 600_000;
     const digest = "sha512";
     const key = this.deriveKey(salt, iterations, digest);
 

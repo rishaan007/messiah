@@ -1,31 +1,22 @@
 # Messiah Local MCP Integration (`stdio`)
 
-**Status**: Phase 4B Implemented & Verified  
-**Components**: `apps/bridge-daemon/src/mcp/`, `apps/server/src/services/devices/deviceManagementService.ts`
+**Status**: Phase 4B Security Hardened & Verified  
+**Components**: `apps/bridge-daemon/src/mcp/` (`LocalMcpRegistry`, `LocalMcpProcess`), `apps/server/src/services/devices/deviceManagementService.ts`
 
 ---
 
-## 1. Overview
+## 1. Untrusted Code Isolation Model
 
-In addition to remote cloud Streamable HTTP / SSE MCP servers (Phase 3A), Messiah supports **Local Stdio MCP Servers** running directly on the user's workstation inside the Local Agent Bridge.
-
-Examples include `@modelcontextprotocol/server-git`, `@modelcontextprotocol/server-filesystem`, local database inspection tools, or proprietary internal CLI tools.
-
----
-
-## 2. Stdio Isolation Architecture
-
-`LocalMcpProcess` isolates communication channels cleanly:
-- **`stdin`**: Exlusively carries JSON-RPC 2.0 requests (`initialize`, `tools/list`, `tools/call`) serialized line-by-line.
-- **`stdout`**: Parsed line-by-line strictly as JSON-RPC 2.0 responses matching pending request IDs.
-- **`stderr`**: Captured as operational diagnostic log lines; never corrupted into JSON-RPC payloads.
-- **Process Sandboxing**: Spawned via argument array (`shell: false`), inside an approved working directory, and with a scrubbed environment.
+Local stdio MCP servers are treated as potentially untrusted executable code:
+- **Mandatory OS Sandboxing**: `LocalMcpProcess.start()` spawns strictly via `ISandboxProvider.spawnInteractive` (Seatbelt on macOS, Bubblewrap on Linux, fail-closed `SANDBOX_UNAVAILABLE` on platforms without verified OS isolation). It never runs unsandboxed `spawn()`.
+- **Filesystem & Network Isolation**: Mounts are read-only by default unless `writableMounts` are explicitly configured; outbound network access is denied by default (`networkPolicy: false`).
+- **Strict Environment Allowlist**: Uses `EnvAllowlist`, stripping provider API keys, database URLs, Bridge credentials, and vault passphrases.
 
 ---
 
-## 3. Discovery & Tool Synchronization
+## 2. Executable Pinning, Explicit Registration & Schema Drift Detection
 
-1. Administrators register a local MCP server in Messiah Cloud via `POST /api/v1/devices/:deviceId/mcp` or configure it locally in `LocalMcpRegistry`.
-2. On WebSocket connect (or upon `device.mcp.sync`), the Bridge executes `tools/list` over stdio, calculates a deterministic SHA-256 `schemaHash`, and emits `device.mcp.discovered`.
-3. `DeviceConnectionGateway` persists the server's status (`ACTIVE`, `DISABLED`, `CRASHED`), `schemaHash`, and tool schemas into `bridge_local_mcp_servers`.
-4. Agents invoke tools via `mcp.invoke`, bound by workspace policy and schema verification.
+1. **No Autonomous Package Installation**: Commands invoking `npx -y`, `npm install`, `pnpm add`, `yarn add`, or `pip install` require explicit `userConfirmed` registration (`USER_CONFIRMATION_REQUIRED`) and can never be triggered autonomously by model output.
+2. **Executable & Config Pinning**: `LocalMcpRegistry` pins `pinnedExecutablePath`, `pinnedExecutableSha256`, `packageName`, `packageVersion`, and `approvedArgsHash`. If the binary path or SHA-256 changes on disk (`MCP_EXECUTABLE_DRIFT` / `MCP_EXECUTABLE_HASH_MISMATCH`), startup aborts immediately.
+3. **Tool Schema Pinning & Drift Detection**: `listTools()` computes deterministic SHA-256 `schemaHash`. Both `BridgeLocalMcpServer` and `LocalMcpProcess.callTool()` detect tool-schema drift (`MCP_SCHEMA_CHANGED` / `MCP_SCHEMA_DRIFT`) and require renewed human authorization before execution.
+4. **Stdio Separation & Untrusted Output**: `stdout` carries strictly JSON-RPC 2.0 lines; `stderr` carries `LogRedactor`-scrubbed diagnostics. Tool outputs are wrapped with `{ untrustedToolOutput: true }` and redacted of secret patterns.

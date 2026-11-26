@@ -107,3 +107,21 @@ CREATE INDEX IF NOT EXISTS "bridge_task_approvals_workspace_status_idx" ON "brid
 CREATE INDEX IF NOT EXISTS "bridge_task_approvals_device_status_idx" ON "bridge_task_approvals"("device_id", "status");
 CREATE INDEX IF NOT EXISTS "bridge_task_approvals_expires_idx" ON "bridge_task_approvals"("expires_at");
 CREATE INDEX IF NOT EXISTS "bridge_task_logs_task_seq_idx" ON "bridge_task_logs"("task_id", "sequence");
+
+-- Phase 4B Security Hardening Extensions (Per-device HMAC keys, MCP pinning, Immutable Approval Bindings)
+ALTER TABLE "bridge_devices" ADD COLUMN IF NOT EXISTS "task_signing_key_encrypted" TEXT;
+ALTER TABLE "bridge_devices" ADD COLUMN IF NOT EXISTS "task_key_version" INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE "bridge_local_mcp_servers" ADD COLUMN IF NOT EXISTS "approved_schema_hash" VARCHAR(64);
+ALTER TABLE "bridge_local_mcp_servers" ADD COLUMN IF NOT EXISTS "pinned_executable_path" TEXT;
+ALTER TABLE "bridge_local_mcp_servers" ADD COLUMN IF NOT EXISTS "pinned_executable_sha256" VARCHAR(64);
+ALTER TABLE "bridge_local_mcp_servers" ADD COLUMN IF NOT EXISTS "package_name" VARCHAR(128);
+ALTER TABLE "bridge_local_mcp_servers" ADD COLUMN IF NOT EXISTS "package_version" VARCHAR(64);
+ALTER TABLE "bridge_local_mcp_servers" ADD COLUMN IF NOT EXISTS "user_confirmed_at" TIMESTAMPTZ(6);
+ALTER TABLE "bridge_local_mcp_servers" ADD COLUMN IF NOT EXISTS "schema_drift_detected" BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE "bridge_task_approvals" ADD COLUMN IF NOT EXISTS "capability" VARCHAR(64);
+ALTER TABLE "bridge_task_approvals" ADD COLUMN IF NOT EXISTS "resource_scopes" TEXT[] DEFAULT ARRAY[]::TEXT[];
+ALTER TABLE "bridge_task_approvals" ADD COLUMN IF NOT EXISTS "executable_identity" TEXT;
+ALTER TABLE "bridge_task_approvals" ADD COLUMN IF NOT EXISTS "mcp_server_name" VARCHAR(128);
+ALTER TABLE "bridge_task_approvals" ADD COLUMN IF NOT EXISTS "mcp_schema_hash" VARCHAR(64);

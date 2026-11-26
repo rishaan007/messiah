@@ -10,23 +10,27 @@ import { SecureFileKeystore } from "./secureFileKeystore.js";
 const execFileAsync = promisify(execFile);
 
 /**
- * Windows Native Credential Store.
- * Uses Windows Data Protection API (DPAPI) via PowerShell to cryptographically bind
- * credentials to the local Windows user login SID, and enforces Windows ACLs via icacls.
+ * Windows Custom DPAPI-Protected File Store.
  *
- * Windows DPAPI utilizes keys derived from the user's Windows login credentials
- * and TPM hardware when available.
+ * NOTE: Stores the encrypted device identity inside `%APPDATA%\Messiah\bridge\device.dpapi`
+ * using Windows Data Protection API (`System.Security.Cryptography.ProtectedData` with
+ * `DataProtectionScope.CurrentUser`) and user-only NTFS ACLs (`icacls /inheritance:r`).
+ * This does NOT use the Windows Credential Manager (`CredWriteW`) generic vault.
+ *
+ * Payloads and file paths are passed strictly via process environment variables to PowerShell,
+ * eliminating string-interpolation command injection.
  */
 export class WindowsCredentialStore implements IKeyStore {
-  public readonly name = "Windows DPAPI & Credential Manager";
+  public readonly name = "Windows Custom DPAPI File Store (CurrentUser + NTFS ACL)";
   private readonly storageDir: string;
   private readonly credentialPath: string;
   private readonly fallbackStore: SecureFileKeystore;
 
   constructor(customDir?: string) {
-    this.storageDir = customDir || path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Messiah", "bridge");
+    this.storageDir =
+      customDir || path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Messiah", "bridge");
     this.credentialPath = path.join(this.storageDir, "device.dpapi");
-    this.fallbackStore = new SecureFileKeystore(this.storageDir);
+    this.fallbackStore = new SecureFileKeystore(this.storageDir, { requirePassphrase: true });
   }
 
   public isHardwareBacked(): boolean {
@@ -43,23 +47,31 @@ export class WindowsCredentialStore implements IKeyStore {
     }
 
     try {
-      // Unprotect ciphertext using DPAPI CurrentUser scope via powershell
-      const script = `
-        $bytes = [System.IO.File]::ReadAllBytes('${this.credentialPath.replace(/'/g, "''")}');
-        $decrypted = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser);
-        [System.Text.Encoding]::UTF8.GetString($decrypted);
-      `;
+      const script = [
+        "Add-Type -AssemblyName System.Security;",
+        "$bytes = [System.IO.File]::ReadAllBytes($env:MESSIAH_DPAPI_PATH);",
+        "$decrypted = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser);",
+        "[System.Text.Encoding]::UTF8.GetString($decrypted);",
+      ].join(" ");
 
-      const { stdout } = await execFileAsync("powershell", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        script,
-      ]);
+      const { stdout } = await execFileAsync(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Command", script],
+        {
+          env: {
+            ...process.env,
+            MESSIAH_DPAPI_PATH: this.credentialPath,
+          },
+        }
+      );
 
       return JSON.parse(stdout.trim()) as DeviceIdentity;
-    } catch {
-      return this.fallbackStore.loadIdentity();
+    } catch (err) {
+      throw new Error(
+        `Failed to unprotect Windows DPAPI credential file at '${this.credentialPath}': ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 
@@ -72,33 +84,33 @@ export class WindowsCredentialStore implements IKeyStore {
       fs.mkdirSync(this.storageDir, { recursive: true });
     }
 
-    try {
-      const plaintextJson = JSON.stringify(identity);
-      const script = `
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes('${plaintextJson.replace(/'/g, "''")}');
-        $encrypted = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser);
-        [System.IO.File]::WriteAllBytes('${this.credentialPath.replace(/'/g, "''")}', $encrypted);
-      `;
+    const payloadBase64 = Buffer.from(JSON.stringify(identity), "utf-8").toString("base64");
+    const script = [
+      "Add-Type -AssemblyName System.Security;",
+      "$bytes = [System.Convert]::FromBase64String($env:MESSIAH_DPAPI_PAYLOAD_B64);",
+      "$encrypted = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser);",
+      "[System.IO.File]::WriteAllBytes($env:MESSIAH_DPAPI_PATH, $encrypted);",
+    ].join(" ");
 
-      await execFileAsync("powershell", [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        script,
-      ]);
+    await execFileAsync(
+      "powershell",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      {
+        env: {
+          ...process.env,
+          MESSIAH_DPAPI_PATH: this.credentialPath,
+          MESSIAH_DPAPI_PAYLOAD_B64: payloadBase64,
+        },
+      }
+    );
 
-      // Enforce Windows ACLs: remove inheritance, grant only current user full control
-      try {
-        await execFileAsync("icacls", [
-          this.credentialPath,
-          "/inheritance:r",
-          "/grant:r",
-          `${os.userInfo().username}:F`,
-        ]);
-      } catch {}
-    } catch {
-      await this.fallbackStore.saveIdentity(identity);
-    }
+    // Enforce restrictive NTFS ACLs: disable inheritance, grant only current user Full Control
+    await execFileAsync("icacls", [
+      this.credentialPath,
+      "/inheritance:r",
+      "/grant:r",
+      `${os.userInfo().username}:F`,
+    ]);
   }
 
   public async deleteIdentity(): Promise<void> {

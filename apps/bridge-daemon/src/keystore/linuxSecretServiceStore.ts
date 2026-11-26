@@ -11,10 +11,10 @@ const execFileAsync = promisify(execFile);
  * Linux Secret Service Keystore.
  * Integrates with freedesktop.org Secret Service API via `secret-tool` (libsecret).
  *
- * FAILS CLOSED ON HEADLESS LINUX:
- * If no D-Bus session or Secret Service is available (e.g. headless server),
- * it refuses to silently store plaintext, requiring an explicit MESSIAH_VAULT_PASSPHRASE
- * to unlock the encrypted file vault.
+ * FAIL-CLOSED ON HEADLESS LINUX:
+ * When no D-Bus session / Secret Service daemon is available, delegates strictly to
+ * SecureFileKeystore configured with `requirePassphrase: true`, which throws
+ * PASSPHRASE_REQUIRED unless MESSIAH_VAULT_PASSPHRASE is explicitly provided.
  */
 export class LinuxSecretServiceStore implements IKeyStore {
   public readonly name = "Linux Secret Service (libsecret)";
@@ -23,7 +23,9 @@ export class LinuxSecretServiceStore implements IKeyStore {
   private readonly fallbackStore: SecureFileKeystore;
 
   constructor(customDir?: string) {
-    this.fallbackStore = new SecureFileKeystore(customDir);
+    this.fallbackStore = new SecureFileKeystore(customDir, {
+      requirePassphrase: os.platform() === "linux",
+    });
   }
 
   private hasDesktopSession(): boolean {
@@ -50,11 +52,10 @@ export class LinuxSecretServiceStore implements IKeyStore {
           return JSON.parse(raw) as DeviceIdentity;
         }
       } catch {
-        // Fall back to software vault below
+        // Fall through to fail-closed passphrase vault if secret-tool has no entry or fails
       }
     }
 
-    // On headless Linux without secret-tool, fallback store requires passphrase or existing vault
     return this.fallbackStore.loadIdentity();
   }
 
@@ -66,7 +67,6 @@ export class LinuxSecretServiceStore implements IKeyStore {
     if (this.hasDesktopSession()) {
       try {
         const payloadBase64 = Buffer.from(JSON.stringify(identity)).toString("base64");
-        // Pipe the password into secret-tool store
         const child = execFile("secret-tool", [
           "store",
           "--label=Messiah Device Identity",
@@ -91,7 +91,7 @@ export class LinuxSecretServiceStore implements IKeyStore {
 
         return;
       } catch {
-        // Fall back to encrypted file vault below
+        // Fall through to fail-closed passphrase vault
       }
     }
 

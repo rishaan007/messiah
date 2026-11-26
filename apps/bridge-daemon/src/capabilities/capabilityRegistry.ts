@@ -6,10 +6,15 @@ import { LocalMcpProcess } from "../mcp/localMcpProcess.js";
 
 export class CapabilityRegistry {
   private readonly capabilities = new Map<string, CapabilityDefinition>();
-  private readonly mcpRegistry = new LocalMcpRegistry();
+  private readonly mcpRegistry: LocalMcpRegistry;
 
-  constructor() {
+  constructor(customDir?: string) {
+    this.mcpRegistry = new LocalMcpRegistry(customDir);
     this.registerBuiltInCapabilities();
+  }
+
+  public getRegistry(): LocalMcpRegistry {
+    return this.mcpRegistry;
   }
 
   public get(name: string): CapabilityDefinition | undefined {
@@ -135,7 +140,7 @@ export class CapabilityRegistry {
       permission: "write",
       supportedPlatforms: ["darwin", "linux", "win32"],
       requiresSandbox: false,
-      requiresApproval: true, // Always requires explicit human approval
+      requiresApproval: true,
       defaultTimeoutMs: 15_000,
       execute: async (ctx, params) => {
         const rootPath = (params.rootPath as string) || ctx.allowedRoots[0] || "";
@@ -151,7 +156,7 @@ export class CapabilityRegistry {
     // 7. mcp.discover
     this.capabilities.set(BRIDGE_CAPABILITIES.MCP_DISCOVER, {
       name: BRIDGE_CAPABILITIES.MCP_DISCOVER,
-      description: "Discover tools exposed by registered local MCP servers",
+      description: "Discover tools exposed by registered local MCP servers inside OS sandbox",
       permission: "read",
       supportedPlatforms: ["darwin", "linux", "win32"],
       requiresSandbox: true,
@@ -162,12 +167,20 @@ export class CapabilityRegistry {
         const results = [];
 
         for (const s of servers) {
+          const proc = new LocalMcpProcess(s, ctx.allowedRoots, ctx.sandbox);
           try {
-            const proc = new LocalMcpProcess(s, ctx.allowedRoots);
             await proc.start();
-            const tools = await proc.listTools();
-            await proc.stop();
-            results.push({ name: s.serverName, command: s.command, args: s.args, status: "ACTIVE", tools });
+            const discovery = await proc.listTools({ enforcePinnedSchema: false });
+            results.push({
+              name: s.serverName,
+              command: s.command,
+              args: s.args,
+              status: "ACTIVE",
+              schemaHash: discovery.schemaHash,
+              schemaChanged: discovery.schemaChanged,
+              sandboxProfile: proc.getSandboxProfile(),
+              tools: discovery.tools,
+            });
           } catch (err) {
             results.push({
               name: s.serverName,
@@ -177,6 +190,8 @@ export class CapabilityRegistry {
               error: err instanceof Error ? err.message : String(err),
               tools: [],
             });
+          } finally {
+            await proc.stop();
           }
         }
 
@@ -187,27 +202,28 @@ export class CapabilityRegistry {
     // 8. mcp.invoke
     this.capabilities.set(BRIDGE_CAPABILITIES.MCP_INVOKE, {
       name: BRIDGE_CAPABILITIES.MCP_INVOKE,
-      description: "Invoke a tool on a registered local MCP stdio server",
+      description: "Invoke a tool on a registered local MCP stdio server inside OS sandbox",
       permission: "exec",
       supportedPlatforms: ["darwin", "linux", "win32"],
       requiresSandbox: true,
-      requiresApproval: false,
+      requiresApproval: true,
       defaultTimeoutMs: 60_000,
       execute: async (ctx, params) => {
         const serverName = params.serverName as string;
         const toolName = params.toolName as string;
         const toolArgs = (params.arguments as Record<string, unknown>) || {};
+        const expectedSchemaHash = params.expectedSchemaHash as string | undefined;
 
         const serverConfig = this.mcpRegistry.getServer(serverName);
         if (!serverConfig) {
           throw new Error(`Local MCP server '${serverName}' is not registered on this device.`);
         }
 
-        const proc = new LocalMcpProcess(serverConfig, ctx.allowedRoots);
+        const proc = new LocalMcpProcess(serverConfig, ctx.allowedRoots, ctx.sandbox);
         await proc.start();
         try {
-          ctx.onLog?.("system", `[MCP] Invoking tool ${serverName}.${toolName}...`);
-          const toolResult = await proc.callTool(toolName, toolArgs);
+          ctx.onLog?.("system", `[MCP] Invoking tool ${serverName}.${toolName} inside OS sandbox '${proc.getSandboxProfile()}'...`);
+          const toolResult = await proc.callTool(toolName, toolArgs, expectedSchemaHash);
           return { serverName, toolName, result: toolResult };
         } finally {
           await proc.stop();
@@ -218,7 +234,7 @@ export class CapabilityRegistry {
     // 9. process.run
     this.capabilities.set(BRIDGE_CAPABILITIES.PROCESS_RUN, {
       name: BRIDGE_CAPABILITIES.PROCESS_RUN,
-      description: "Run a sandboxed process or script with argument arrays and resource ceilings",
+      description: "Run an OS-sandboxed process with argument arrays and resource ceilings",
       permission: "exec",
       supportedPlatforms: ["darwin", "linux", "win32"],
       requiresSandbox: true,
@@ -233,16 +249,21 @@ export class CapabilityRegistry {
         const executable = params.executable as string;
         const args = (params.args as string[]) || [];
         const cwd = (params.cwd as string) || ctx.allowedRoots[0] || "";
-        const timeoutMs = (params.timeoutMs as number) || policy.maxExecutionTimeoutMs;
+        const timeoutMs = Math.min((params.timeoutMs as number) || policy.maxExecutionTimeoutMs, 600_000);
 
-        ctx.onLog?.("system", `[Sandbox] Spawning process: ${executable} ${args.join(" ")} in ${cwd}`);
+        ctx.onLog?.("system", `[Sandbox] Launching '${executable}' in '${cwd}'`);
         const result = await ctx.sandbox.execute(
           {
+            taskId: ctx.taskId,
             executable,
             args,
             cwd,
             allowedMounts: ctx.allowedRoots,
+            readOnlyMounts: policy.readOnlyRoots,
+            writableMounts: policy.writableRoots,
             timeoutMs,
+            maxMemoryBytes: policy.maxMemoryBytes,
+            networkAllowed: Boolean(policy.networkAllowed),
           },
           (stream, chunk) => ctx.onLog?.(stream, chunk)
         );
@@ -254,7 +275,7 @@ export class CapabilityRegistry {
     // 10. process.inspect
     this.capabilities.set(BRIDGE_CAPABILITIES.PROCESS_INSPECT, {
       name: BRIDGE_CAPABILITIES.PROCESS_INSPECT,
-      description: "Inspect active processes and sandbox health",
+      description: "Inspect active sandbox health and enforcement capabilities",
       permission: "read",
       supportedPlatforms: ["darwin", "linux", "win32"],
       requiresSandbox: false,

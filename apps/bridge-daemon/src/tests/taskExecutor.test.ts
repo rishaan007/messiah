@@ -44,7 +44,7 @@ describe("Phase 4B: Task Authorization & Signed Execution", () => {
     const nonce = overrides.nonce || crypto.randomBytes(16).toString("hex");
     const policyVersion = "2026-08-01";
 
-    const canonicalPayload = TaskSignatureVerifier.formatTaskAuthPayload(
+    const canonicalPayload = TaskSignatureVerifier.formatCanonicalPayloadV2({
       taskId,
       requestId,
       deviceId,
@@ -55,8 +55,8 @@ describe("Phase 4B: Task Authorization & Signed Execution", () => {
       issuedAt,
       expiresAt,
       nonce,
-      policyVersion
-    );
+      policyVersion,
+    });
 
     const serverSignature =
       overrides.serverSignature ||

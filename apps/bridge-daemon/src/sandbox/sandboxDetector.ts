@@ -1,4 +1,5 @@
 import os from "node:os";
+import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -13,53 +14,120 @@ export interface DetectedSandboxStatus {
 
 export class SandboxDetector {
   /**
-   * Detects the best available workstation sandbox provider for the current host OS.
+   * Probes actual OS-enforced sandbox primitives on the current host.
    *
-   * Linux: Checks for Bubblewrap (`bwrap`) with user/mount namespaces.
-   * macOS: Checks for macOS isolated runner with scrubbed env and canonical path containment.
-   * Windows: Checks for Windows Job Object & execution isolation.
-   *
-   * UNIVERSAL FAIL-CLOSED RULE:
-   * If the platform cannot satisfy process tree containment and environment scrubbing,
-   * terminal execution is reported as UNAVAILABLE rather than executing unsandboxed.
+   * FAIL-CLOSED GUARANTEE:
+   * Never reports available=true unless the OS kernel isolation primitive is verified functional.
+   * - macOS: Proves `/usr/bin/sandbox-exec` (Seatbelt deny-default profile) actually runs.
+   * - Linux: Proves `bwrap` (Bubblewrap) can unshare namespaces on this kernel.
+   * - Windows: Requires a verified AppContainer helper binary (`MESSIAH_WIN_APPCONTAINER_HELPER`).
+   *   Windows Job Objects alone are process lifecycle/resource controls, NOT a security boundary.
    */
   public static async detect(): Promise<DetectedSandboxStatus> {
     const platform = os.platform();
 
-    if (platform === "linux") {
+    if (platform === "darwin") {
+      const sandboxExecPath = "/usr/bin/sandbox-exec";
+      if (!fs.existsSync(sandboxExecPath)) {
+        return {
+          available: false,
+          providerName: "macos-seatbelt",
+          platform,
+          reason: "/usr/bin/sandbox-exec is missing on this macOS host.",
+        };
+      }
+
       try {
-        const { stdout } = await execFileAsync("bwrap", ["--version"]);
-        if (stdout && stdout.includes("bubblewrap")) {
+        const probeProfile = '(version 1)(deny default)(import "system.sb")(allow process-exec)';
+        const { stdout } = await execFileAsync(
+          sandboxExecPath,
+          ["-p", probeProfile, "/bin/echo", "SEATBELT_PROBE_OK"],
+          { timeout: 5000 }
+        );
+        if (stdout && stdout.includes("SEATBELT_PROBE_OK")) {
           return {
             available: true,
-            providerName: "linux-bubblewrap",
+            providerName: "macos-seatbelt",
             platform,
           };
         }
-      } catch {
         return {
           available: false,
-          providerName: "linux-bubblewrap",
+          providerName: "macos-seatbelt",
           platform,
-          reason: "Bubblewrap (bwrap) is not installed or lacks unprivileged user namespace permissions.",
+          reason: "macOS Seatbelt probe returned unexpected output.",
+        };
+      } catch (err) {
+        return {
+          available: false,
+          providerName: "macos-seatbelt",
+          platform,
+          reason: `macOS Seatbelt probe failed: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
     }
 
-    if (platform === "darwin") {
-      // macOS ARM64 / x64 isolated process runner with scrubbed environment and restricted directory containment
-      return {
-        available: true,
-        providerName: "macos-restricted-process",
-        platform,
-      };
+    if (platform === "linux") {
+      try {
+        const probeArgs = [
+          "--ro-bind",
+          "/usr",
+          "/usr",
+          "--ro-bind",
+          "/bin",
+          "/bin",
+          ...(fs.existsSync("/lib") ? ["--ro-bind", "/lib", "/lib"] : []),
+          ...(fs.existsSync("/lib64") ? ["--ro-bind", "/lib64", "/lib64"] : []),
+          "--unshare-user",
+          "--unshare-pid",
+          "--unshare-ipc",
+          "--unshare-net",
+          "--die-with-parent",
+          "--",
+          "/bin/true",
+        ];
+        await execFileAsync("bwrap", probeArgs, { timeout: 5000 });
+        return {
+          available: true,
+          providerName: "linux-bubblewrap",
+          platform,
+        };
+      } catch (err) {
+        return {
+          available: false,
+          providerName: "linux-bubblewrap",
+          platform,
+          reason: `Bubblewrap (bwrap) namespace isolation unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
     }
 
     if (platform === "win32") {
+      const appContainerHelper = process.env.MESSIAH_WIN_APPCONTAINER_HELPER;
+      if (appContainerHelper && fs.existsSync(appContainerHelper)) {
+        try {
+          await execFileAsync(appContainerHelper, ["--probe"], { timeout: 5000 });
+          return {
+            available: true,
+            providerName: "windows-appcontainer",
+            platform,
+          };
+        } catch (err) {
+          return {
+            available: false,
+            providerName: "windows-appcontainer",
+            platform,
+            reason: `Windows AppContainer helper probe failed: ${err instanceof Error ? err.message : String(err)}`,
+          };
+        }
+      }
+
       return {
-        available: true,
-        providerName: "windows-job-object",
+        available: false,
+        providerName: "windows-appcontainer",
         platform,
+        reason:
+          "Windows AppContainer isolation helper is not configured on this workstation. Failing closed rather than executing unsandboxed user-level processes (Job Objects alone are not a security sandbox).",
       };
     }
 
@@ -67,7 +135,7 @@ export class SandboxDetector {
       available: false,
       providerName: "unsupported",
       platform,
-      reason: `Operating system '${platform}' is not supported for sandboxed execution.`,
+      reason: `Operating system '${platform}' does not have an implemented OS-enforced sandbox.`,
     };
   }
 }

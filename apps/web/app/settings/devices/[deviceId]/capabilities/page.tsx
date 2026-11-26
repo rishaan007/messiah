@@ -534,9 +534,21 @@ function DeviceCapabilitiesContent() {
                   <span>Workstation Sandbox & Execution Limits</span>
                 </div>
                 <p className="text-xs text-[#94A3B8]">
-                  Configure process isolation, resource thresholds, and privilege boundaries
-                  enforced by the local ProcessSandbox runner.
+                  Configure process isolation, resource thresholds, and privilege boundaries.
+                  OS sandbox-dependent execution fails closed with SANDBOX_UNAVAILABLE when the host OS lacks verified kernel isolation.
                 </p>
+
+                {deviceData && !deviceData.capabilities.includes("process.run") && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-950/20 p-3 text-xs text-amber-300">
+                    <div className="font-semibold flex items-center gap-1.5">
+                      <AlertCircle className="h-3.5 w-3.5" />
+                      <span>Sandboxed Process / MCP Execution Unavailable</span>
+                    </div>
+                    <p className="text-[11px] text-amber-200/80 pt-1">
+                      This workstation has not reported active OS sandbox availability for `process.run` or `mcp.invoke`. Unsandboxed fallback execution is strictly disabled.
+                    </p>
+                  </div>
+                )}
 
                 <div className="space-y-3 pt-1">
                   {/* Terminal Execution Toggle */}

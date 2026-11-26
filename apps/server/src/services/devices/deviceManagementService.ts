@@ -374,7 +374,7 @@ export class DeviceManagementService {
 
   /**
    * Registers or updates a local MCP server configuration on the device.
-   * Requires OWNER or ADMIN role.
+   * Requires OWNER or ADMIN role and explicit user confirmation for auto-install executables.
    */
   public async registerLocalMcpServer(
     deviceId: string,
@@ -386,6 +386,11 @@ export class DeviceManagementService {
       args?: string[];
       cwd?: string;
       env?: Record<string, string>;
+      pinnedExecutablePath?: string;
+      pinnedExecutableSha256?: string;
+      packageName?: string;
+      packageVersion?: string;
+      userConfirmed?: boolean;
     }
   ) {
     const role = await workspaceService.getUserRole(workspaceId, userId);
@@ -396,6 +401,21 @@ export class DeviceManagementService {
       throw new DeviceManagementError(403, "FORBIDDEN_ROLE", "Only workspace OWNER or ADMIN can register local MCP servers.");
     }
 
+    const args = input.args || [];
+    const baseCmd = input.command.split(/[\\/]/).pop()?.toLowerCase() || "";
+    const isAutoInstall =
+      ((baseCmd === "npx" || baseCmd === "bunx") && (args.includes("-y") || args.includes("--yes"))) ||
+      ((baseCmd === "npm" || baseCmd === "pnpm" || baseCmd === "yarn" || baseCmd === "pip" || baseCmd === "pip3") &&
+        /\b(install|add|dlx)\b/i.test(args.join(" ")));
+
+    if (isAutoInstall && input.userConfirmed === false) {
+      throw new DeviceManagementError(
+        400,
+        "USER_CONFIRMATION_REQUIRED",
+        "Auto-install package commands require explicit user confirmation."
+      );
+    }
+
     const device = await prisma.bridgeDevice.findUnique({
       where: { id: deviceId },
     });
@@ -403,6 +423,8 @@ export class DeviceManagementService {
     if (!device || device.workspaceId !== workspaceId) {
       throw new DeviceManagementError(404, "DEVICE_NOT_FOUND", "Device not found in this workspace.");
     }
+
+    const confirmedAt = input.userConfirmed !== false ? new Date() : null;
 
     const server = await prisma.bridgeLocalMcpServer.upsert({
       where: {
@@ -416,21 +438,56 @@ export class DeviceManagementService {
         workspaceId,
         serverName: input.serverName,
         command: input.command,
-        args: input.args || [],
+        args,
         cwd: input.cwd,
         env: input.env as any,
+        pinnedExecutablePath: input.pinnedExecutablePath,
+        pinnedExecutableSha256: input.pinnedExecutableSha256,
+        packageName: input.packageName,
+        packageVersion: input.packageVersion,
+        userConfirmedAt: confirmedAt,
+        schemaDriftDetected: false,
         status: "ACTIVE",
       },
       update: {
         command: input.command,
-        args: input.args || [],
+        args,
         cwd: input.cwd,
         env: input.env as any,
+        pinnedExecutablePath: input.pinnedExecutablePath,
+        pinnedExecutableSha256: input.pinnedExecutableSha256,
+        packageName: input.packageName,
+        packageVersion: input.packageVersion,
+        userConfirmedAt: confirmedAt,
+        schemaDriftDetected: false,
         status: "ACTIVE",
       },
     });
 
     return server;
+  }
+
+  /**
+   * Explicitly rotates a device's unique 256-bit HMAC task signing key.
+   * Requires OWNER or ADMIN role.
+   */
+  public async rotateDeviceTaskKey(deviceId: string, workspaceId: string, userId: string) {
+    const role = await workspaceService.getUserRole(workspaceId, userId);
+    if (!role) {
+      throw new DeviceManagementError(404, "WORKSPACE_NOT_FOUND", "Workspace not found or access denied.");
+    }
+    if (role !== "OWNER" && role !== "ADMIN") {
+      throw new DeviceManagementError(403, "FORBIDDEN_ROLE", "Only workspace OWNER or ADMIN can rotate device signing keys.");
+    }
+
+    const device = await prisma.bridgeDevice.findUnique({ where: { id: deviceId } });
+    if (!device || device.workspaceId !== workspaceId) {
+      throw new DeviceManagementError(404, "DEVICE_NOT_FOUND", "Device not found in this workspace.");
+    }
+
+    const { taskAuthorizationService } = await import("./taskAuthorizationService.js");
+    const rotated = await taskAuthorizationService.rotateDeviceSigningKey(deviceId);
+    return { deviceId, keyVersion: rotated.version };
   }
 }
 

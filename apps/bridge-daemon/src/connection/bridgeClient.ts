@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import os from "node:os";
 import {
   DEVICE_API_ROUTES,
+  DEVICE_CONSTANTS,
   ServerToDeviceFrameSchema,
   type ServerToDeviceFrame,
   type BridgeAuthProofFrame,
@@ -19,13 +20,13 @@ import { PairingClient, type PairingConfig } from "../pairing/pairingClient.js";
 import { getPlatformKeystore, type IKeyStore } from "../keystore/index.js";
 import { TaskExecutor } from "../tasks/taskExecutor.js";
 import { SandboxDetector } from "../sandbox/sandboxDetector.js";
+import { LogRedactor } from "../security/logRedactor.js";
 
 export interface BridgeClientOptions {
   serverUrl?: string;
   keystore?: IKeyStore;
   customConfigDir?: string;
   autoReconnect?: boolean;
-  serverSigningSecret?: string;
 }
 
 export class BridgeClient extends EventEmitter {
@@ -35,7 +36,8 @@ export class BridgeClient extends EventEmitter {
   private identity: DeviceIdentity | null = null;
   private config: PairingConfig | null = null;
   private taskExecutor: TaskExecutor;
-  private serverSigningSecret: string;
+  /** Per-device 256-bit HMAC signing key provisioned upon authenticated WSS handshake */
+  private deviceTaskSigningKey: string | null = null;
 
   private isRunning = false;
   private isConnected = false;
@@ -51,7 +53,6 @@ export class BridgeClient extends EventEmitter {
     this.keystore = options.keystore || getPlatformKeystore(options.customConfigDir);
     this.pairingClient = new PairingClient(this.keystore, options.customConfigDir);
     this.taskExecutor = new TaskExecutor(options.customConfigDir);
-    this.serverSigningSecret = options.serverSigningSecret || process.env.MESSIAH_SERVER_SIGNING_KEY || "messiah_default_server_signing_secret_min_32_chars";
   }
 
   public getTaskExecutor(): TaskExecutor {
@@ -70,9 +71,6 @@ export class BridgeClient extends EventEmitter {
     return this.config;
   }
 
-  /**
-   * Initializes identity and pairing config, then opens connection.
-   */
   public async start(): Promise<void> {
     if (this.isRunning) return;
     this.isRunning = true;
@@ -86,15 +84,12 @@ export class BridgeClient extends EventEmitter {
 
     this.identity = await this.keystore.loadIdentity();
     if (!this.identity) {
-      throw new Error("Device private key not found in local keystore. Run `messiah-bridge pair` again.");
+      throw new Error("Device private key not found in local keystore or could not be unlocked.");
     }
 
     this.connect();
   }
 
-  /**
-   * Constructs the WebSocket endpoint and establishes the outbound TLS connection.
-   */
   private connect(): void {
     if (!this.isRunning || this.isRevoked) return;
 
@@ -115,7 +110,7 @@ export class BridgeClient extends EventEmitter {
       });
 
       this.setupSocketHandlers();
-    } catch (err) {
+    } catch {
       this.scheduleReconnect();
     }
   }
@@ -160,6 +155,7 @@ export class BridgeClient extends EventEmitter {
 
         case "device.auth.success": {
           this.isConnected = true;
+          this.deviceTaskSigningKey = frame.taskSigningKey || null;
           this.startHeartbeatLoop(frame.heartbeatIntervalMs);
           this.reportCapabilities();
           this.emit("connected", frame);
@@ -172,7 +168,7 @@ export class BridgeClient extends EventEmitter {
         }
 
         case "device.task.cancel": {
-          this.taskExecutor.cancelTask(frame.taskId);
+          this.handleTaskCancel(frame.taskId, frame.reason);
           break;
         }
 
@@ -199,6 +195,7 @@ export class BridgeClient extends EventEmitter {
         case "device.revoked": {
           this.isRevoked = true;
           this.isConnected = false;
+          this.deviceTaskSigningKey = null;
           this.emit("revoked", frame);
           this.stop();
           break;
@@ -217,9 +214,6 @@ export class BridgeClient extends EventEmitter {
     }
   }
 
-  /**
-   * Responds to server challenge with an Ed25519 signature proof.
-   */
   private handleServerChallenge(challenge: {
     challengeId: string;
     nonce: string;
@@ -305,6 +299,7 @@ export class BridgeClient extends EventEmitter {
 
   private handleDisconnection(code: number, reason: string): void {
     this.isConnected = false;
+    this.deviceTaskSigningKey = null;
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
@@ -318,13 +313,17 @@ export class BridgeClient extends EventEmitter {
   }
 
   /**
-   * Reports device capabilities, approved project roots, and sandbox availability to Messiah Cloud.
+   * Reports accurate capabilities: sandbox-dependent capabilities (process.run, mcp.*, agent.start)
+   * are omitted when the host fails closed with SANDBOX_UNAVAILABLE.
    */
   public async reportCapabilities(): Promise<void> {
     if (!this.isConnected) return;
     try {
       const sandboxStatus = await SandboxDetector.detect();
-      const capabilities = this.taskExecutor.getCapabilityRegistry().getNames();
+      const allDefs = this.taskExecutor.getCapabilityRegistry().getAll();
+      const capabilities = allDefs
+        .filter((cap) => !cap.requiresSandbox || sandboxStatus.available)
+        .map((cap) => cap.name);
       const allowedRoots = this.taskExecutor.getPolicyService().getAllowedRoots();
 
       const frame: BridgeCapabilitiesReportedFrame = {
@@ -342,9 +341,6 @@ export class BridgeClient extends EventEmitter {
     } catch {}
   }
 
-  /**
-   * Discovers tools on registered local MCP servers and reports them to Messiah Cloud.
-   */
   public async reportLocalMcp(): Promise<void> {
     if (!this.isConnected) return;
     try {
@@ -373,35 +369,97 @@ export class BridgeClient extends EventEmitter {
     } catch {}
   }
 
-  /**
-   * Dispatches task to TaskExecutor and routes streaming frames back to Messiah Cloud.
-   */
   private handleTaskDispatch(frame: DeviceTaskDispatchFrame): void {
-    this.taskExecutor.executeTask(frame, this.serverSigningSecret, {
-      onAccepted: (taskId) => {
-        this.send({ type: "device.task.accepted", taskId, timestamp: Date.now() });
+    if (!this.deviceTaskSigningKey || !this.identity) {
+      this.send({
+        type: "device.task.failed",
+        taskId: frame.taskId,
+        code: "MISSING_SIGNING_KEY",
+        message: "Device per-device HMAC signing key is not provisioned on this connection.",
+        durationMs: 0,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    this.taskExecutor.executeTask(
+      frame,
+      {
+        hmacSecret: this.deviceTaskSigningKey,
+        expectedDeviceId: this.identity.deviceId,
+        expectedWorkspaceId: this.config?.workspaceId,
+        expectedProtocolVersion: DEVICE_CONSTANTS.PROTOCOL_VERSION,
+        expectedAudience: "messiah-bridge",
       },
-      onStarted: (taskId, sandboxProfile) => {
-        this.send({ type: "device.task.started", taskId, sandboxProfile, timestamp: Date.now() });
-      },
-      onProgress: (taskId, percent, message) => {
-        this.send({ type: "device.task.progress", taskId, progressPercent: percent, message, timestamp: Date.now() });
-      },
-      onLog: (taskId, sequence, stream, chunk) => {
-        this.send({ type: "device.task.log", taskId, sequence, stream, chunk, timestamp: Date.now() });
-      },
-      onCompleted: (taskId, result, durationMs) => {
-        this.send({ type: "device.task.completed", taskId, result, durationMs, timestamp: Date.now() });
-      },
-      onFailed: (taskId, code, message, durationMs) => {
-        this.send({ type: "device.task.failed", taskId, code, message, durationMs, timestamp: Date.now() });
-      },
-    });
+      {
+        onAccepted: (taskId) => {
+          this.send({ type: "device.task.accepted", taskId, timestamp: Date.now() });
+        },
+        onStarted: (taskId, sandboxProfile) => {
+          this.send({ type: "device.task.started", taskId, sandboxProfile, timestamp: Date.now() });
+        },
+        onProgress: (taskId, percent, message) => {
+          this.send({ type: "device.task.progress", taskId, progressPercent: percent, message, timestamp: Date.now() });
+        },
+        onLog: (taskId, sequence, stream, chunk) => {
+          this.send({
+            type: "device.task.log",
+            taskId,
+            sequence,
+            stream,
+            chunk: LogRedactor.redact(chunk),
+            timestamp: Date.now(),
+          });
+        },
+        onApprovalRequired: (taskId, approval) => {
+          this.send({
+            type: "device.approval.required",
+            taskId,
+            ...approval,
+          });
+        },
+        onCompleted: (taskId, result, durationMs) => {
+          this.send({ type: "device.task.completed", taskId, result, durationMs, timestamp: Date.now() });
+        },
+        onFailed: (taskId, code, message, durationMs) => {
+          this.send({
+            type: "device.task.failed",
+            taskId,
+            code,
+            message: LogRedactor.redact(message),
+            durationMs,
+            timestamp: Date.now(),
+          });
+        },
+        onCancelled: (taskId, reason) => {
+          this.send({ type: "device.task.cancelled", taskId, reason, timestamp: Date.now() });
+        },
+        onUnknownOutcome: (taskId, reason) => {
+          this.send({ type: "device.task.unknown_outcome", taskId, reason, timestamp: Date.now() });
+        },
+      }
+    );
   }
 
-  /**
-   * Exponential backoff reconnection with jitter (1s, 2s, 4s, 8s, up to 30s).
-   */
+  private async handleTaskCancel(taskId: string, reason: string): Promise<void> {
+    const res = await this.taskExecutor.cancelTask(taskId);
+    if (res.confirmed) {
+      this.send({
+        type: "device.task.cancelled",
+        taskId,
+        reason: reason || "Process tree termination confirmed.",
+        timestamp: Date.now(),
+      });
+    } else {
+      this.send({
+        type: "device.task.unknown_outcome",
+        taskId,
+        reason: "Could not confirm child process tree termination after cancellation request.",
+        timestamp: Date.now(),
+      });
+    }
+  }
+
   private scheduleReconnect(): void {
     if (!this.isRunning || this.isRevoked) return;
 
@@ -417,11 +475,9 @@ export class BridgeClient extends EventEmitter {
     }, delay);
   }
 
-  /**
-   * Graceful disconnection and stop.
-   */
   public async stop(reason = "Daemon shutting down"): Promise<void> {
     this.isRunning = false;
+    this.deviceTaskSigningKey = null;
 
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
