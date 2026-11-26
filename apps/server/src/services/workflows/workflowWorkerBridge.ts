@@ -5,6 +5,7 @@ import { cancellationService } from "../chat/cancellationService.js";
 import { deviceTaskService } from "../devices/deviceTaskService.js";
 import { workflowStreamPublisher } from "./workflowStreamPublisher.js";
 import { workflowEventRouter } from "./workflowEventRouter.js";
+import { notificationService } from "../notifications/index.js";
 
 let workflowVaultInstance: VaultService | null = null;
 function getWorkflowVault(): VaultService {
@@ -42,6 +43,26 @@ export function createServerWorkflowRuntime(): WorkflowExecutionRuntime {
     },
     publishEvent: async (event) => {
       await workflowStreamPublisher.publish(event);
+      if (event.type === "workflow.node.awaiting_approval" || event.type === "workflow.run.awaiting_approval") {
+        const approvalId = String((event.payload as Record<string, unknown>)?.approvalId || "");
+        const title = String((event.payload as Record<string, unknown>)?.title || "Workflow Approval Required");
+        notificationService
+          .emitWorkspaceNotification({
+            workspaceId: event.workspaceId,
+            category: "WORKFLOW_APPROVAL",
+            title,
+            preview: String(
+              (event.payload as Record<string, unknown>)?.summary ||
+                `Workflow run requires administrator confirmation to continue.`
+            ),
+            resourceType: approvalId ? "workflow_approval" : "workflow_run",
+            resourceId: approvalId || event.runId,
+            deepLink: `/workflows/runs/${event.runId}`,
+            dedupKey: `wf-approval-${approvalId || event.runId}`,
+            approversOnly: true,
+          })
+          .catch(() => {});
+      }
     },
     dispatchBridgeTask: async (params) => {
       const task = await deviceTaskService.createAndDispatchTask({
@@ -101,6 +122,21 @@ export function createServerWorkflowRuntime(): WorkflowExecutionRuntime {
           ? "workflow.failed"
           : null;
       if (!domainType) return;
+
+      const isFailure = params.status === "FAILED";
+      notificationService
+        .emitWorkspaceNotification({
+          workspaceId: params.workspaceId,
+          category: isFailure ? "WORKFLOW_FAILED" : "WORKFLOW_COMPLETED",
+          title: isFailure ? "Workflow Run Failed" : "Workflow Run Completed",
+          preview: params.summary || `Workflow finished with status ${params.status}.`,
+          resourceType: "workflow_run",
+          resourceId: params.runId,
+          deepLink: `/workflows/runs/${params.runId}`,
+          dedupKey: `wf-terminal-${params.runId}-${params.status}`,
+          specificUserId: params.triggeredByUserId,
+        })
+        .catch(() => {});
 
       await workflowEventRouter.emitDomainEvent({
         workspaceId: params.workspaceId,

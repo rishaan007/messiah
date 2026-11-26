@@ -1240,4 +1240,16 @@ Migration `9_vector_memory_and_workflows` enables `CREATE EXTENSION IF NOT EXIST
 
 ---
 
+## 14. Cross-Platform Notifications & Push Subscriptions (Phase 7)
+
+Migration `10_notifications_push_and_sessions` introduces cross-device notification persistence, push subscription storage, and notification preferences anchored cleanly to `users` and `workspaces`:
+
+- **`NotificationCategory` Enum**: `TOOL_APPROVAL`, `BRIDGE_APPROVAL`, `SWARM_APPROVAL`, `WORKFLOW_APPROVAL`, `AGENT_RUN_COMPLETED`, `AGENT_RUN_FAILED`, `WORKFLOW_COMPLETED`, `WORKFLOW_FAILED`, `DEVICE_STATUS`.
+- **`ClientPlatform` Enum**: `WEB_PWA`, `MACOS_DESKTOP`, `WINDOWS_DESKTOP`, `LINUX_DESKTOP`, `IOS_CAPACITOR`, `ANDROID_CAPACITOR`.
+- **`notification_devices`**: Tracks registered Web Push (HTTPS endpoint, `push_p256dh`, `push_auth`), Capacitor APNs/FCM tokens, or Tauri native push clients per user, uniquely indexed by SHA-256 `subscription_hash` and revocable via `is_active` / `revoked_at`.
+- **`notification_preferences`**: Per-`(user_id, workspace_id)` unique preference row controlling channel opt-ins (`in_app_enabled`, `web_push_enabled`, `desktop_enabled`, `mobile_push_enabled`), category toggles (`notify_approvals`, `notify_completions`, `notify_failures`, `notify_device_status`), and UTC `quiet_hours_start` / `quiet_hours_end`.
+- **`notification_items`**: Privacy-scrubbed notification records carrying sanitized `preview`, relative `deep_link`, `metadata` JSONB, `read_at`, optional `expires_at`, and unique `(recipient_user_id, dedup_key)` constraint enforcing database-level duplicate suppression across concurrent workers.
+
+---
+
 _End of Document: Messiah Database Schema & Persistence Specification._

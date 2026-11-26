@@ -1,0 +1,28 @@
+{
+  "name": "@messiah/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MESSIAH Tauri 2 Desktop Application (macOS, Windows, Linux)",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "tauri:build": "tauri build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@messiah/shared": "workspace:*",
+    "@tauri-apps/api": "^2.10.0"
+  },
+  "devDependencies": {
+    "@messiah/config": "workspace:*",
+    "@tauri-apps/cli": "^2.12.6",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.21.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}

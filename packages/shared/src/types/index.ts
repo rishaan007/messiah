@@ -1644,3 +1644,117 @@ export interface WorkflowStreamEvent {
   timestamp: string;
   payload: Record<string, unknown>;
 }
+
+// ==============================================================================
+// Phase 7: Notifications, Unified Approvals, Audit & Platform Types
+// ==============================================================================
+
+export type NotificationCategory =
+  | "TOOL_APPROVAL"
+  | "BRIDGE_APPROVAL"
+  | "SWARM_APPROVAL"
+  | "WORKFLOW_APPROVAL"
+  | "AGENT_RUN_COMPLETED"
+  | "AGENT_RUN_FAILED"
+  | "WORKFLOW_COMPLETED"
+  | "WORKFLOW_FAILED"
+  | "DEVICE_STATUS";
+
+export type ClientPlatform =
+  | "WEB_PWA"
+  | "MACOS_DESKTOP"
+  | "WINDOWS_DESKTOP"
+  | "LINUX_DESKTOP"
+  | "IOS_CAPACITOR"
+  | "ANDROID_CAPACITOR";
+
+export interface NotificationDeviceInfo {
+  id: string;
+  userId: string;
+  workspaceId: string | null;
+  platform: ClientPlatform;
+  deviceLabel: string;
+  pushProvider: string;
+  appVersion: string | null;
+  isActive: boolean;
+  lastSeenAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface NotificationPreferenceInfo {
+  id: string;
+  userId: string;
+  workspaceId: string;
+  inAppEnabled: boolean;
+  webPushEnabled: boolean;
+  desktopEnabled: boolean;
+  mobilePushEnabled: boolean;
+  notifyApprovals: boolean;
+  notifyCompletions: boolean;
+  notifyFailures: boolean;
+  notifyDeviceStatus: boolean;
+  quietHoursStart: string | null;
+  quietHoursEnd: string | null;
+  updatedAt: string;
+}
+
+export interface NotificationItemInfo {
+  id: string;
+  workspaceId: string;
+  recipientUserId: string;
+  category: NotificationCategory;
+  title: string;
+  preview: string;
+  resourceType: string;
+  resourceId: string;
+  deepLink: string;
+  metadata: Record<string, unknown>;
+  expiresAt: string | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export type UnifiedApprovalKind = "MCP_TOOL" | "BRIDGE_TASK" | "WORKFLOW_GATE" | "SWARM_PLAN";
+
+export interface UnifiedApprovalItem {
+  id: string;
+  kind: UnifiedApprovalKind;
+  workspaceId: string;
+  title: string;
+  summary: string;
+  status: string;
+  expiresAt: string | null;
+  createdAt: string;
+  deepLink: string;
+  resourceId: string;
+  parentRunId?: string | null;
+  threadId?: string | null;
+  deviceName?: string | null;
+  toolName?: string | null;
+  capability?: string | null;
+  previewDetails: Record<string, unknown>;
+}
+
+export interface AuditLogEntryInfo {
+  id: string;
+  workspaceId: string;
+  actorId: string | null;
+  actorEmail?: string | null;
+  actorName?: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  details: Record<string, unknown>;
+  ipAddress: string | null;
+  createdAt: string;
+}
+
+export interface PlatformCapabilityMatrixEntry {
+  platform: "macos" | "windows" | "linux" | "web_pwa" | "ios" | "android";
+  label: string;
+  sandboxProvider: string;
+  sandboxSupported: boolean;
+  keystoreEngine: string;
+  notes: string;
+}

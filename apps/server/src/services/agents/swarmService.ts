@@ -656,6 +656,21 @@ export class SwarmService {
       details: { rejectionReason: rejectionReason || null },
     });
 
+    import("../notifications/index.js")
+      .then(({ notificationStreamPublisher }) =>
+        notificationStreamPublisher.publish({
+          type: "approval.resolved",
+          workspaceId,
+          payload: {
+            kind: "SWARM_PLAN",
+            resourceId: runId,
+            decision: action === "approve" ? "APPROVED" : "DENIED",
+          },
+          timestamp: new Date().toISOString(),
+        })
+      )
+      .catch(() => {});
+
     return formatAgentRun(txResult.run);
   }
 

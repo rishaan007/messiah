@@ -11,6 +11,8 @@ import {
 } from "../../../services/chat/index.js";
 import { swarmService, swarmStreamPublisher } from "../../../services/agents/index.js";
 import { workflowService, workflowStreamPublisher } from "../../../services/workflows/index.js";
+import { notificationService, notificationStreamPublisher } from "../../../services/notifications/index.js";
+import { workspaceService } from "../../../services/workspaceService.js";
 
 export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
   /**
@@ -83,6 +85,7 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
       }
 
       let authenticatedUserId: string | null = null;
+      const workspaceUnsubscribers = new Map<string, () => void>();
       const threadUnsubscribers = new Map<string, () => void>();
       const swarmUnsubscribers = new Map<string, () => void>();
       const workflowUnsubscribers = new Map<string, () => void>();
@@ -135,7 +138,7 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
             return;
           }
 
-          const { action, ticket, threadId, runId } = validated.data;
+          const { action, ticket, workspaceId: reqWorkspaceId, threadId, runId } = validated.data;
 
           // A. Handle "auth" action
           if (action === "auth") {
@@ -374,6 +377,65 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
             }
             return;
           }
+
+          // I. Handle "workspace.subscribe" action (notifications, approvals & device telemetry)
+          if (action === "workspace.subscribe") {
+            if (!reqWorkspaceId) {
+              sendFrame("error", undefined, {
+                code: "MISSING_WORKSPACE_ID",
+                message: "workspaceId is required for workspace subscription",
+              });
+              return;
+            }
+
+            const isMember = await workspaceService.isUserMember(reqWorkspaceId, authenticatedUserId);
+            if (!isMember) {
+              sendFrame("error", undefined, {
+                code: "FORBIDDEN",
+                message: "Unauthorized workspace subscription",
+              });
+              return;
+            }
+
+            if (workspaceUnsubscribers.has(reqWorkspaceId)) {
+              workspaceUnsubscribers.get(reqWorkspaceId)!();
+              workspaceUnsubscribers.delete(reqWorkspaceId);
+            }
+
+            const unsubWs = notificationStreamPublisher.onWorkspaceEvent(reqWorkspaceId, (event) => {
+              if (event.recipientUserId && event.recipientUserId !== authenticatedUserId) {
+                return;
+              }
+              sendFrame(event.type, event);
+            });
+            workspaceUnsubscribers.set(reqWorkspaceId, unsubWs);
+
+            const [notifs, approvals] = await Promise.all([
+              notificationService.listNotifications({
+                workspaceId: reqWorkspaceId,
+                userId: authenticatedUserId,
+                limit: 30,
+              }),
+              notificationService.listUnifiedPendingApprovals(reqWorkspaceId, authenticatedUserId),
+            ]);
+
+            sendFrame("workspace.snapshot", {
+              workspaceId: reqWorkspaceId,
+              notifications: notifs.notifications,
+              unreadCount: notifs.unreadCount,
+              pendingApprovals: approvals,
+            });
+            return;
+          }
+
+          // J. Handle "workspace.unsubscribe" action
+          if (action === "workspace.unsubscribe") {
+            if (reqWorkspaceId && workspaceUnsubscribers.has(reqWorkspaceId)) {
+              workspaceUnsubscribers.get(reqWorkspaceId)!();
+              workspaceUnsubscribers.delete(reqWorkspaceId);
+            }
+            return;
+          }
         } catch (err: unknown) {
           sendFrame("error", undefined, {
             code: "INTERNAL_ERROR",
@@ -385,6 +447,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
       // 4. Clean up subscriptions on disconnect
       socket.on("close", () => {
         clearTimeout(authTimeout);
+        for (const unsub of workspaceUnsubscribers.values()) {
+          unsub();
+        }
+        workspaceUnsubscribers.clear();
         for (const unsub of threadUnsubscribers.values()) {
           unsub();
         }

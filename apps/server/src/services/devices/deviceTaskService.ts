@@ -492,6 +492,21 @@ export class DeviceTaskService {
       }
     }
 
+    import("../notifications/index.js")
+      .then(({ notificationStreamPublisher }) =>
+        notificationStreamPublisher.publish({
+          type: "approval.resolved",
+          workspaceId,
+          payload: {
+            kind: "BRIDGE_TASK",
+            resourceId: taskId,
+            decision: action === "approve" ? "APPROVED" : "DENIED",
+          },
+          timestamp: new Date().toISOString(),
+        })
+      )
+      .catch(() => {});
+
     return txResult.updatedTask;
   }
 

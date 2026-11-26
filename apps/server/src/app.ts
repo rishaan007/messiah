@@ -8,7 +8,7 @@ import sensiblePlugin from "./plugins/sensible.js";
 import prismaPlugin from "./plugins/prisma.js";
 import redisPlugin from "./plugins/redis.js";
 import authPlugin from "./plugins/auth.js";
-import { healthRoutes } from "./routes/health.js";
+import { healthRoutes, incrementHttpRequestMetric } from "./routes/health.js";
 import { systemRoutes } from "./routes/api/v1/system.js";
 import { userRoutes } from "./routes/api/v1/user.js";
 import { workspaceRoutes } from "./routes/api/v1/workspaces.js";
@@ -24,9 +24,11 @@ import { agentRoutes } from "./routes/api/v1/agents.js";
 import { swarmRoutes } from "./routes/api/v1/swarms.js";
 import { memoryRoutes } from "./routes/api/v1/memories.js";
 import { workflowRoutes } from "./routes/api/v1/workflows.js";
+import { notificationRoutes } from "./routes/api/v1/notifications.js";
 import { streamPublisher, ticketService, cancellationService, chatQueueManager, chatWorkerManager, ReconciliationService } from "./services/chat/index.js";
 import { swarmStreamPublisher } from "./services/agents/index.js";
 import { workflowStreamPublisher, workflowSchedulerService } from "./services/workflows/index.js";
+import { notificationStreamPublisher } from "./services/notifications/index.js";
 import { devicePresenceService } from "./services/devices/index.js";
 import { createLogger } from "./utils/logger.js";
 
@@ -46,17 +48,29 @@ export async function buildApp(opts: BuildAppOptions) {
   });
 
   // Core Security Plugins
-  await app.register(corsPlugin, { origin: opts.env.CORS_ORIGIN });
+  await app.register(corsPlugin, {
+    origin: opts.env.CORS_ORIGIN,
+    extraOrigins: opts.env.MESSIAH_ALLOWED_ORIGINS,
+  });
   await app.register(helmetPlugin);
   await app.register(sensiblePlugin);
-  await app.register(rateLimit, {
-    max: 120,
-    timeWindow: '1 minute',
-  });
 
   // Persistence & Cache Plugins
   await app.register(prismaPlugin);
   await app.register(redisPlugin, { url: opts.env.REDIS_URL });
+
+  // Distributed rate-limiter backed by Redis in production (in-memory fallback in test)
+  await app.register(rateLimit, {
+    max: opts.env.RATE_LIMIT_MAX_PER_MIN || 180,
+    timeWindow: '1 minute',
+    ...(opts.env.NODE_ENV === 'production' && app.redis?.status === 'ready'
+      ? { redis: app.redis }
+      : {}),
+  });
+
+  app.addHook('onResponse', async () => {
+    incrementHttpRequestMetric();
+  });
 
   // Authentication Plugin
   await app.register(authPlugin, {
@@ -76,6 +90,7 @@ export async function buildApp(opts: BuildAppOptions) {
   streamPublisher.setRedis(app.redis);
   swarmStreamPublisher.setRedis(app.redis);
   workflowStreamPublisher.setRedis(app.redis);
+  notificationStreamPublisher.setRedis(app.redis);
   ticketService.setRedis(app.redis);
   cancellationService.setRedis(app.redis);
   devicePresenceService.setRedis(app.redis);
@@ -167,6 +182,7 @@ export async function buildApp(opts: BuildAppOptions) {
   await app.register(swarmRoutes, { prefix: "/api/v1" });
   await app.register(memoryRoutes, { prefix: "/api/v1" });
   await app.register(workflowRoutes, { prefix: "/api/v1" });
+  await app.register(notificationRoutes, { prefix: "/api/v1" });
 
   return app;
 }

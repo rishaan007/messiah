@@ -31,6 +31,7 @@ import { createClient } from "@/lib/supabase/client";
 import { ToolApprovalCard } from "./tools/ToolApprovalCard";
 import { ToolActivityTimeline } from "./tools/ToolActivityTimeline";
 import { ThreadToolSelector } from "./tools/ThreadToolSelector";
+import { loadOfflineDraft, saveOfflineDraft, clearOfflineDraft } from "@/lib/offlineDrafts";
 import type {
   ThreadInfo,
   MessageInfo,
@@ -117,6 +118,14 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
   const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:3001/api/v1/realtime";
 
   const [savedMemoryMsgIds, setSavedMemoryMsgIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!currentThreadId) return;
+    const draft = loadOfflineDraft(currentThreadId);
+    if (draft?.content) {
+      setInputText((prev) => (prev.trim().length === 0 ? draft.content : prev));
+    }
+  }, [currentThreadId]);
 
   const handleSaveMessageToMemory = async (msg: MessageInfo) => {
     if (!authToken || !activeWorkspace || !msg.content?.trim()) return;
@@ -855,6 +864,7 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
 
     const messageContent = inputText.trim();
     setInputText("");
+    if (targetThreadId) clearOfflineDraft(targetThreadId);
     setIsSending(true);
 
     const idempotencyKey = `idem-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1505,7 +1515,11 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
                     ref={inputRef}
                     rows={2}
                     value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setInputText(val);
+                      if (currentThreadId) saveOfflineDraft(currentThreadId, val);
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();

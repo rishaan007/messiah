@@ -6,6 +6,7 @@ import { cancellationService } from "../chat/cancellationService.js";
 import { deviceTaskService } from "../devices/deviceTaskService.js";
 import { swarmStreamPublisher } from "./swarmStreamPublisher.js";
 import { workflowEventRouter } from "../workflows/workflowEventRouter.js";
+import { notificationService } from "../notifications/index.js";
 
 const vaultService = new VaultService();
 
@@ -41,12 +42,44 @@ export function createServerSwarmRuntime(): SwarmExecutionRuntime {
     },
     publishEvent: async (event) => {
       await swarmStreamPublisher.publish(event);
+      if (event.type === "swarm.run.awaiting_plan_approval") {
+        notificationService
+          .emitWorkspaceNotification({
+            workspaceId: event.workspaceId,
+            category: "SWARM_APPROVAL",
+            title: "Swarm Execution Plan Ready for Approval",
+            preview: "A multi-agent swarm plan is awaiting administrator sign-off before execution.",
+            resourceType: "agent_run",
+            resourceId: event.runId,
+            deepLink: `/approvals?kind=SWARM_PLAN&id=${event.runId}`,
+            dedupKey: `swarm-plan-${event.runId}`,
+            approversOnly: true,
+          })
+          .catch(() => {});
+      }
       if (
         event.type === "swarm.run.completed" ||
         event.type === "swarm.run.partial_completed" ||
         event.type === "swarm.run.failed"
       ) {
-        const domainType = event.type === "swarm.run.failed" ? "swarm.failed" : "swarm.completed";
+        const isFailure = event.type === "swarm.run.failed";
+        const domainType = isFailure ? "swarm.failed" : "swarm.completed";
+        notificationService
+          .emitWorkspaceNotification({
+            workspaceId: event.workspaceId,
+            category: isFailure ? "AGENT_RUN_FAILED" : "AGENT_RUN_COMPLETED",
+            title: isFailure ? "Agent Swarm Failed" : "Agent Swarm Completed",
+            preview: String(
+              (event.payload as Record<string, unknown>)?.finalSummary ||
+                (event.payload as Record<string, unknown>)?.errorMessage ||
+                `Swarm run finished (${event.type}).`
+            ),
+            resourceType: "agent_run",
+            resourceId: event.runId,
+            deepLink: `/swarms/${event.runId}`,
+            dedupKey: `swarm-terminal-${event.runId}-${event.type}`,
+          })
+          .catch(() => {});
         workflowEventRouter
           .emitDomainEvent({
             workspaceId: event.workspaceId,

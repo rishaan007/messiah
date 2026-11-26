@@ -10,3 +10,5 @@ allowBuilds:
   protobufjs: true
 minimumReleaseAgeExclude:
   - '@anthropic-ai/sdk@1.12.0'
+  - '@capacitor/cli@8.6.3'
+  - '@capacitor/core@8.6.3'

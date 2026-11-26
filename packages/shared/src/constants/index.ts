@@ -2,7 +2,7 @@ export const PRODUCT_IDENTITY = {
   name: "MESSIAH",
   fullName: "MESSIAH — The Universal AI Agent Workspace",
   tagline: "One intelligence layer. Every agent. Every device.",
-  version: "0.1.0",
+  version: "1.0.0",
 } as const;
 
 export const DEFAULT_PORTS = {
@@ -662,3 +662,75 @@ export const STARTER_WORKFLOW_TEMPLATES: WorkflowStarterTemplate[] = [
     },
   },
 ];
+
+// ==============================================================================
+// Phase 7: Notifications, Unified Approvals, Audit & Platform Matrix Constants
+// ==============================================================================
+
+export const NOTIFICATION_API_ROUTES = {
+  list: "/api/v1/notifications",
+  markRead: "/api/v1/notifications/read",
+  preferences: "/api/v1/notifications/preferences",
+  devices: "/api/v1/notifications/devices",
+  revokeDevice: "/api/v1/notifications/devices/:deviceId",
+  vapidPublicKey: "/api/v1/notifications/vapid-public-key",
+} as const;
+
+export const APPROVAL_API_ROUTES = {
+  pending: "/api/v1/approvals",
+} as const;
+
+export const AUDIT_API_ROUTES = {
+  list: "/api/v1/audit-logs",
+} as const;
+
+export const PLATFORM_CAPABILITY_MATRIX = [
+  {
+    platform: "macos",
+    label: "macOS Desktop & Bridge (ARM64 / Apple Silicon)",
+    sandboxProvider: "macos-seatbelt",
+    sandboxSupported: true,
+    keystoreEngine: "macOS Keychain (security CLI / Apple SecItem)",
+    notes: "Seatbelt kernel sandboxing, scoped egress proxy, and Keychain verified on ARM64 macOS.",
+  },
+  {
+    platform: "linux",
+    label: "Linux Desktop & Bridge (x64 / ARM64)",
+    sandboxProvider: "linux-bubblewrap",
+    sandboxSupported: true,
+    keystoreEngine: "Linux Secret Service (libsecret / passphrase vault v2)",
+    notes: "Bubblewrap unprivileged user/PID/net namespaces and libsecret fail-closed vault; requires live host kernel check.",
+  },
+  {
+    platform: "windows",
+    label: "Windows Desktop & Bridge (x64)",
+    sandboxProvider: "windows-appcontainer",
+    sandboxSupported: false,
+    keystoreEngine: "Windows DPAPI CurrentUser + NTFS ACLs",
+    notes: "Process/MCP sandbox fails closed until native messiah-appcontainer-helper.exe is compiled and probe-verified on Windows.",
+  },
+  {
+    platform: "web_pwa",
+    label: "Web & Installable PWA",
+    sandboxProvider: "cloud-server-only",
+    sandboxSupported: true,
+    keystoreEngine: "Supabase HttpOnly SSR Cookies",
+    notes: "No direct local OS execution; routes local actions to paired Bridge workstations.",
+  },
+  {
+    platform: "ios",
+    label: "iPhone & iPad (PWA + Capacitor iOS)",
+    sandboxProvider: "cloud-server-only",
+    sandboxSupported: true,
+    keystoreEngine: "Supabase Session + Web/APNs Push Token",
+    notes: "Mobile-optimized UI, 2D swarm fallback, approval triage; IPA compilation requires full Xcode + Apple Developer signing.",
+  },
+  {
+    platform: "android",
+    label: "Android Phones & Tablets (PWA + Capacitor Android)",
+    sandboxProvider: "cloud-server-only",
+    sandboxSupported: true,
+    keystoreEngine: "Supabase Session + Web/FCM Push Token",
+    notes: "Installable PWA + Capacitor Android project; AAB/APK signing requires Android SDK + release keystore.",
+  },
+] as const;

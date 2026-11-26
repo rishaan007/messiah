@@ -674,4 +674,25 @@ Phase 6 extends Messiah with persistent long-term semantic memory (`pgvector`) a
 
 ---
 
+## 19. Cross-Platform Clients, Notifications & Production Release Architecture (Phase 7)
+
+Phase 7 promotes Messiah (`v1.0.0`) into a cohesive multi-platform system built around a single authoritative Next.js 16 + Fastify 5 + BullMQ + PostgreSQL/`pgvector` + Redis runtime:
+
+1. **Installable Web PWA & Native Mobile Wrapper (`apps/web` + `apps/mobile`)**:
+   - `apps/web` exposes a PWA Web App Manifest (`/manifest.webmanifest`), static maskable icons (`192x192`, `512x512`, `apple-touch-icon.png`), a strict network-first Service Worker (`/sw.js`) implementing a hard **zero-cache guarantee** on `/api/*`, `/auth/*`, WebSockets, and non-GET calls, plus `/offline.html` and offline chat draft persistence in `localStorage` (`apps/web/lib/offlineDrafts.ts`).
+   - Mobile responsive navigation (`MobileBottomNav`), `44px` minimum touch targets, `env(safe-area-inset-*)` spacing, and cross-platform Universal Links / App Links manifests (`/.well-known/apple-app-site-association`, `/.well-known/assetlinks.json`).
+   - `@messiah/mobile` (`apps/mobile`) configures Capacitor 8 (`com.messiah.mobile`, `capacitor.config.ts`) and typed runtime bridges (`mobileBridge.ts`) for allowlisted deep-link validation, haptic feedback, network transition callbacks, and APNs/FCM token registration.
+2. **Tauri 2 Desktop Application (`apps/desktop`)**:
+   - Shells Messiah through Tauri 2 (`src-tauri/src/lib.rs`) using an authenticated server/PWA URL architecture (`MESSIAH_WEB_ORIGIN` defaulting to `http://localhost:3000` in dev) paired with least-privilege Tauri v2 capability scoping (`capabilities/default.json`), strict CSP, system tray controls (Open Dashboard, Check Bridge Status, Quit), minimize-to-tray, OS notifications, deep-link validation (`messiah://` allowlist rejecting traversal/arbitrary origins), autostart opt-in, OS keychain secret storage (`keyring` crate), and signed Ed25519/minisign auto-updater configuration (`tauri-plugin-updater`).
+   - Local Agent Bridge lifecycle supervision (`messiah_bridge_start`, `messiah_bridge_stop`, `messiah_bridge_status`) integrated alongside workstation capabilities telemetry inside `DesktopRuntimePanel` without bypassing `PathGuard`, `ReplayGuard`, or `ProcessSandbox`.
+3. **Cross-Device Notification Engine, Unified Approvals & Governance**:
+   - Real-time `notificationStreamPublisher` + `notificationService` persist deduplicated (`(recipientUserId, dedupKey)`), secret-scrubbed (`sanitizeNotificationPreview`) notifications across MCP tool approvals, Bridge task approvals, Swarm plan approvals, Workflow gates, run completions/failures, and Bridge connectivity changes.
+   - Multiplexed `/api/v1/realtime` `workspace.subscribe` / `workspace.unsubscribe` frames synchronize initial snapshots (`workspace.snapshot`) and push updates (`notification.created`) alongside optional VAPID Web Push delivery (`web-push`).
+   - Dedicated routes: `/approvals` (cross-device triage across MCP, Bridge, Swarm, Workflow), `/audit` (workspace governance explorer), and `/settings/notifications` (granular category/channel toggles, quiet hours, Web Push & device revocation).
+4. **Production Deployment, Observability & Backup Infrastructure**:
+   - Multi-stage Docker images (`apps/server/Dockerfile`, `apps/worker/Dockerfile`, `apps/web/Dockerfile` with `MESSIAH_NEXT_OUTPUT=standalone`), `.dockerignore`, and `infrastructure/production/{docker-compose.prod.yml,nginx.conf,prometheus.yml}` adding Nginx TLS/WebSocket proxy routing and Prometheus scraping of `/metrics`.
+   - PostgreSQL 16 + `pgvector` compressed custom dump/checksum backup & verified restore automation (`infrastructure/scripts/{backup-postgres.sh,restore-postgres.sh}`).
+
+---
+
 _End of Document: Messiah System Architecture Specification._

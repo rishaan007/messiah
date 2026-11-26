@@ -464,4 +464,27 @@ Every security-sensitive event writes an immutable record to the `audit_logs` ta
 
 ---
 
+## 16. Cross-Platform Client & Production Deployment Security (Phase 7)
+
+1. **Fail-Closed Production Boot Guardrails (`apps/server/src/config/env.ts`)**:
+   - When `NODE_ENV === "production"`, `validateProductionSecurityConfig` throws immediately at startup if `VAULT_ENCRYPTION_KEY` is missing or equals any dev example value, if auth keys (`SUPABASE_JWT_SECRET` / `SUPABASE_URL`) are missing, or if `MESSIAH_ALLOWED_ORIGINS` / `CORS_ORIGIN` is empty or contains wildcard `*`.
+2. **CORS, Security Headers & Log Redaction**:
+   - `cors.ts` rejects unrecognized origins in production and forbids wildcard `*`. `helmet.ts` enables strict HSTS (`max-age=31536000; includeSubDomains`), `frame-ancestors 'none'`, `object-src 'none'`, and environment-scoped `connect-src`.
+   - `logger.ts` (`LOG_REDACT_PATHS`) masks `authorization`, `cookie`, `apiKey`, `password`, `secret`, `token`, `ciphertext`, `pairingCode`, `nativePushToken`, `pushP256dh`, and `pushAuth` across structured JSON logs.
+3. **Tauri 2 Desktop Capability & IPC Isolation (`apps/desktop`)**:
+   - `withGlobalTauri: false`, explicit least-privilege capability ACL (`src-tauri/capabilities/default.json`), restrictive CSP, no unrestricted shell plugin access, OS keychain credential handling isolated in Rust (`keyring`), and strict Rust + TypeScript deep-link URL parser rejecting `..`, traversal paths, external hosts, or unlisted routes.
+   - Updater plugin verifies cryptographic Ed25519/minisign signatures against the configured `pubkey` before applying updates; unsigned payloads are rejected fail-closed. Production releases require provisioning the maintainer's real `TAURI_SIGNING_PRIVATE_KEY`, matching public key, and OS code signing credentials (`Apple Developer ID` + notarization / Windows EV/Authenticode).
+4. **PWA & Mobile Offline Safety (`apps/web`, `apps/mobile`)**:
+   - `/sw.js` never caches `/api/*`, `/auth/*`, POST/PUT/PATCH/DELETE payloads, or WebSocket frames. Sensitive credentials, vault secrets, and memory search records never enter offline browser caches. Mobile `resolveSafeMobileDeepLink` restricts universal links strictly to allowlisted hosts and relative app paths.
+5. **Notifications Privacy & Metrics Authentication**:
+   - `sanitizeNotificationPreview` strips API keys (`sk-*`, `AIza*`), bearer tokens, PEM blocks, and database connection URLs before writing notification banners, Web Push payloads, or WebSocket frames. Open-redirect deep links (`https://...`) normalize cleanly to `/`.
+   - `POST /api/v1/notifications/devices` rejects plain `http://` Web Push endpoints (`422 INSECURE_PUSH_ENDPOINT`).
+   - `/metrics` supports bearer-token protection via `MESSIAH_METRICS_TOKEN`.
+6. **Workstation Sandbox OS Status (v1.0.0)**:
+   - **macOS ARM64 (`darwin`)**: Native Seatbelt (`sandbox-exec`) + macOS Keychain verified live.
+   - **Linux**: `SandboxDetector` probes kernel `bwrap` user namespaces and fails closed if disallowed (verified inside macOS Docker Desktop container where `bwrap` returned kernel unprivileged userns permission denial); native bare-metal Linux verification remains required before enabling Linux sandboxing unconditionally.
+   - **Windows**: `apps/bridge-daemon/native/win-appcontainer-helper/main.cpp` provides the Win32 `CreateAppContainerProfile` helper implementation, and `SandboxDetector` remains strictly fail-closed until the C++ binary is compiled, signed, and verified on Windows hosts (`MESSIAH_WIN_APPCONTAINER_HELPER`). Unsandboxed execution is never enabled as a fallback.
+
+---
+
 _End of Document: Messiah Security Architecture & Zero-Trust Model._

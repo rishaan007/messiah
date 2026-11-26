@@ -512,4 +512,14 @@ Messiah targets the **2026-07-28 MCP Specification** using the official TypeScri
 
 ---
 
+## 10. Cross-Platform Clients, Push Delivery & Observability Integration (Phase 7)
+
+- **Shared Web Frontend Across Surfaces**: Both the installable Progressive Web App (`apps/web`), Tauri 2 desktop client (`apps/desktop`), and Capacitor 8 mobile shell (`apps/mobile`) reuse the single Next.js 16 React 19 UI and shared domain contracts (`@messiah/shared`).
+- **Tauri Bridge Integration (`apps/desktop` -> `apps/bridge-daemon`)**: Desktop IPC commands supervise user-space local Bridge execution (`messiah_bridge_start`, `messiah_bridge_stop`, `messiah_bridge_status`) while preserving Ed25519 OS Keychain credentials, project root restrictions, signed task envelopes (`MESSIAH_TASK_AUTH:...`), and explicit admin authorization governance.
+- **Realtime Multiplexed Workspace Stream (`/api/v1/realtime`)**: `workspace.subscribe` subscribes clients cleanly to `notificationStreamPublisher` events (`notification.created`), pushing live unread counters and unified approval snapshots directly into `Header` and `/approvals`.
+- **VAPID Web Push & Service Worker (`web-push` + `/sw.js`)**: When `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY` are provisioned, `NotificationService` dispatches encrypted Web Push notifications to registered `WEB_PWA` devices and automatically deactivates endpoints returning HTTP `404` or `410`.
+- **Prometheus Telemetry (`/metrics`)**: Exposes process memory gauges, HTTP counter, PostgreSQL/Redis readiness probes, `pgvector` extension health, transactional outbox backlog counts, active paired bridges, and published workflow counts cleanly for `infrastructure/production/prometheus.yml`.
+
+---
+
 _End of Document: Messiah Integration Strategy & Connector Specification._

@@ -1156,7 +1156,7 @@ export class MemoryService {
       }
     }
 
-    let matches: MemorySearchMatch[] = [];
+    const matches: MemorySearchMatch[] = [];
     let mode: "vector" | "hybrid" | "lexical_fallback" = "lexical_fallback";
 
     if (queryVector) {

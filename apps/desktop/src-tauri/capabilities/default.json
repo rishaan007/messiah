@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Least-privilege Tauri 2 capabilities strictly restricted to local trusted MESSIAH origins.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:3000/*", "http://127.0.0.1:3000/*"]
+  },
+  "permissions": [
+    "core:default",
+    "notification:default",
+    "dialog:allow-open",
+    "autostart:default",
+    "deep-link:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install"
+  ]
+}

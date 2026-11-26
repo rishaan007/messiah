@@ -1,0 +1,32 @@
+[package]
+name = "messiah-desktop"
+version = "1.0.0"
+description = "MESSIAH — Cross-Platform Desktop Client (Tauri 2)"
+authors = ["Messiah Core Team"]
+edition = "2021"
+
+[lib]
+name = "messiah_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+keyring = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

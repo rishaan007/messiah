@@ -16,16 +16,28 @@ out
 .env.development.local
 .env.test.local
 .env.production.local
+.env.production
+.env.staging
 *.env
 
-# Keep .env.example
+# Keep .env examples
 !.env.example
+!.env.staging.example
+!.env.production.example
 
 # Database & local volumes
 *.db
 *.db-journal
+*.dump
+backups/
 postgres_data
 redis_data
+
+# Native / Desktop / Mobile build artifacts
+apps/desktop/src-tauri/target/
+apps/bridge-daemon/native/win-appcontainer-helper/build/
+apps/mobile/ios/
+apps/mobile/android/
 
 # Logs
 logs

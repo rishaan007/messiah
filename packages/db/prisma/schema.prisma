@@ -76,6 +76,9 @@ model User {
   triggeredWorkflowRuns      WorkflowRun[]          @relation("TriggeredWorkflowRuns")
   requestedWorkflowApprovals WorkflowApproval[]     @relation("RequestedWorkflowApprovals")
   decidedWorkflowApprovals   WorkflowApproval[]     @relation("DecidedWorkflowApprovals")
+  notificationDevices        NotificationDevice[]
+  notificationPreferences    NotificationPreference[]
+  notifications              NotificationItem[]
 
   @@index([externalProvider, externalId])
   @@map("users")
@@ -128,6 +131,9 @@ model Workspace {
   workflowApprovals   WorkflowApproval[]
   workflowRunEvents   WorkflowRunEvent[]
   workflowEventLogs   WorkflowEventDispatchLog[]
+  notificationDevices NotificationDevice[]
+  notificationPrefs   NotificationPreference[]
+  notifications       NotificationItem[]
 
   @@index([ownerId])
   @@map("workspaces")
@@ -1683,4 +1689,109 @@ model WorkflowEventDispatchLog {
   @@unique([triggerId, dedupKey])
   @@index([workspaceId, createdAt])
   @@map("workflow_event_logs")
+}
+
+// ==============================================================================
+// 14. CROSS-PLATFORM NOTIFICATIONS, PUSH DEVICES & PREFERENCES (PHASE 7)
+// ==============================================================================
+
+enum NotificationCategory {
+  TOOL_APPROVAL
+  BRIDGE_APPROVAL
+  SWARM_APPROVAL
+  WORKFLOW_APPROVAL
+  AGENT_RUN_COMPLETED
+  AGENT_RUN_FAILED
+  WORKFLOW_COMPLETED
+  WORKFLOW_FAILED
+  DEVICE_STATUS
+}
+
+enum ClientPlatform {
+  WEB_PWA
+  MACOS_DESKTOP
+  WINDOWS_DESKTOP
+  LINUX_DESKTOP
+  IOS_CAPACITOR
+  ANDROID_CAPACITOR
+}
+
+model NotificationDevice {
+  id               String         @id @default(uuid()) @db.Uuid
+  userId           String         @map("user_id") @db.Uuid
+  workspaceId      String?        @map("workspace_id") @db.Uuid
+  platform         ClientPlatform
+  deviceLabel      String         @map("device_label") @db.VarChar(128)
+  pushProvider     String         @map("push_provider") @db.VarChar(32)
+  subscriptionHash String         @unique @map("subscription_hash") @db.VarChar(64)
+  pushEndpoint     String?        @map("push_endpoint") @db.Text
+  pushP256dh       String?        @map("push_p256dh") @db.Text
+  pushAuth         String?        @map("push_auth") @db.Text
+  nativePushToken  String?        @map("native_push_token") @db.Text
+  appVersion       String?        @map("app_version") @db.VarChar(32)
+  isActive         Boolean        @default(true) @map("is_active")
+  lastSeenAt       DateTime       @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  revokedAt        DateTime?      @map("revoked_at") @db.Timestamptz(6)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace        Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@index([workspaceId, isActive])
+  @@map("notification_devices")
+}
+
+model NotificationPreference {
+  id                 String    @id @default(uuid()) @db.Uuid
+  userId             String    @map("user_id") @db.Uuid
+  workspaceId        String    @map("workspace_id") @db.Uuid
+  inAppEnabled       Boolean   @default(true) @map("in_app_enabled")
+  webPushEnabled     Boolean   @default(true) @map("web_push_enabled")
+  desktopEnabled     Boolean   @default(true) @map("desktop_enabled")
+  mobilePushEnabled  Boolean   @default(true) @map("mobile_push_enabled")
+  notifyApprovals    Boolean   @default(true) @map("notify_approvals")
+  notifyCompletions  Boolean   @default(true) @map("notify_completions")
+  notifyFailures     Boolean   @default(true) @map("notify_failures")
+  notifyDeviceStatus Boolean   @default(true) @map("notify_device_status")
+  quietHoursStart    String?   @map("quiet_hours_start") @db.VarChar(8)
+  quietHoursEnd      String?   @map("quiet_hours_end") @db.VarChar(8)
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  user               User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace          Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+  @@map("notification_preferences")
+}
+
+model NotificationItem {
+  id              String               @id @default(uuid()) @db.Uuid
+  workspaceId     String               @map("workspace_id") @db.Uuid
+  recipientUserId String               @map("recipient_user_id") @db.Uuid
+  category        NotificationCategory
+  title           String               @db.VarChar(160)
+  preview         String               @db.VarChar(280)
+  resourceType    String               @map("resource_type") @db.VarChar(48)
+  resourceId      String               @map("resource_id") @db.VarChar(128)
+  deepLink        String               @map("deep_link") @db.VarChar(255)
+  dedupKey        String               @map("dedup_key") @db.VarChar(160)
+  metadata        Json                 @default("{}") @db.JsonB
+  expiresAt       DateTime?            @map("expires_at") @db.Timestamptz(6)
+  readAt          DateTime?            @map("read_at") @db.Timestamptz(6)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  recipientUser   User                 @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  @@unique([recipientUserId, dedupKey])
+  @@index([recipientUserId, workspaceId, readAt, createdAt(sort: Desc)])
+  @@index([resourceType, resourceId])
+  @@map("notifications")
 }

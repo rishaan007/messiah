@@ -3,6 +3,8 @@ import helmet from "@fastify/helmet";
 import type { FastifyPluginAsync } from "fastify";
 
 const helmetPlugin: FastifyPluginAsync = async (fastify) => {
+  const isProduction = process.env.NODE_ENV === "production";
+
   await fastify.register(helmet, {
     contentSecurityPolicy: {
       directives: {
@@ -15,9 +17,18 @@ const helmetPlugin: FastifyPluginAsync = async (fastify) => {
         scriptSrc: ["'self'"],
         scriptSrcAttr: ["'none'"],
         styleSrc: ["'self'", "https:", "'unsafe-inline'"],
+        connectSrc: isProduction
+          ? ["'self'", "https:", "wss:"]
+          : ["'self'", "https:", "wss:", "http://localhost:*", "ws://localhost:*"],
       },
     },
-    crossOriginEmbedderPolicy: false, // Allows cross-origin asset sharing for web clients
+    strictTransportSecurity: isProduction
+      ? {
+          maxAge: 31536000,
+          includeSubDomains: true,
+        }
+      : false,
+    crossOriginEmbedderPolicy: false,
   });
 };
 

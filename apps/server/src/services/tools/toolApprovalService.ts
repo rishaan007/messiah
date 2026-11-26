@@ -9,6 +9,7 @@ import { streamPublisher } from "../chat/streamPublisher.js";
 import { chatQueueManager, type GenerationJobPayload } from "../chat/chatQueue.js";
 import { logAuditEvent } from "../auditService.js";
 import { workspaceService } from "../workspaceService.js";
+import { notificationService, notificationStreamPublisher } from "../notifications/index.js";
 
 export class ToolApprovalServiceError extends Error {
   public readonly statusCode: number;
@@ -175,6 +176,26 @@ export class ToolApprovalService {
         expiresAt: expiresAt.toISOString(),
       },
     });
+
+    notificationService
+      .emitWorkspaceNotification({
+        workspaceId: params.workspaceId,
+        category: "TOOL_APPROVAL",
+        title: `Approval needed: ${params.toolName}`,
+        preview: `MCP tool call '${params.toolName}' awaits authorization before execution.`,
+        resourceType: "tool_approval",
+        resourceId: result.toolApproval.id,
+        deepLink: `/approvals?kind=MCP_TOOL&id=${result.toolApproval.id}`,
+        dedupKey: `tool-approval-${result.toolApproval.id}`,
+        expiresAt,
+        approversOnly: true,
+        metadata: {
+          toolName: params.toolName,
+          threadId: params.threadId,
+          generationRunId: params.generationRunId,
+        },
+      })
+      .catch(() => {});
 
     return result;
   }
@@ -568,6 +589,19 @@ export class ToolApprovalService {
       },
     });
 
+    notificationStreamPublisher
+      .publish({
+        type: "approval.resolved",
+        workspaceId: updatedApproval.workspaceId,
+        payload: {
+          kind: "MCP_TOOL",
+          resourceId: updatedApproval.id,
+          decision: "APPROVED",
+        },
+        timestamp: new Date().toISOString(),
+      })
+      .catch(() => {});
+
     return updatedApproval;
   }
 
@@ -873,6 +907,19 @@ export class ToolApprovalService {
         outboxEventId: outboxEvent.id,
       },
     });
+
+    notificationStreamPublisher
+      .publish({
+        type: "approval.resolved",
+        workspaceId: updatedApproval.workspaceId,
+        payload: {
+          kind: "MCP_TOOL",
+          resourceId: updatedApproval.id,
+          decision: "DENIED",
+        },
+        timestamp: new Date().toISOString(),
+      })
+      .catch(() => {});
 
     return updatedApproval;
   }

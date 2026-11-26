@@ -64,6 +64,13 @@ export const ServerEnvSchema = z.object({
     .string()
     .min(32, "VAULT_ENCRYPTION_KEY must be at least 32 characters/bytes for AES-256")
     .optional(),
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  VAPID_SUBJECT: z.string().optional(),
+  MESSIAH_METRICS_TOKEN: z.string().optional(),
+  ENABLE_EMBEDDED_WORKER: z.string().optional(),
+  RATE_LIMIT_MAX_PER_MIN: z.coerce.number().int().min(10).max(5000).default(180),
+  DATABASE_POOL_MAX: z.coerce.number().int().min(2).max(200).optional(),
 });
 
 export type ServerEnv = z.infer<typeof ServerEnvSchema>;
@@ -160,6 +167,8 @@ export type RealtimeTicketRequestInput = z.infer<typeof RealtimeTicketRequestSch
 export const WebSocketClientFrameSchema = z.object({
   action: z.enum([
     "auth",
+    "workspace.subscribe",
+    "workspace.unsubscribe",
     "thread.subscribe",
     "thread.unsubscribe",
     "swarm.subscribe",
@@ -169,6 +178,7 @@ export const WebSocketClientFrameSchema = z.object({
     "ping",
   ]),
   ticket: z.string().trim().min(16).max(256).optional(),
+  workspaceId: z.string().uuid().optional(),
   threadId: z.string().uuid().optional(),
   runId: z.string().uuid().optional(),
 });
@@ -907,3 +917,72 @@ export const WorkflowApprovalDecisionSchema = z.object({
   reason: z.string().trim().max(500).optional(),
 });
 export type WorkflowApprovalDecisionDto = z.infer<typeof WorkflowApprovalDecisionSchema>;
+
+// ==============================================================================
+// Phase 7: Cross-Platform Notifications, Devices & Audit Log Schemas
+// ==============================================================================
+
+export const ClientPlatformSchema = z.enum([
+  "WEB_PWA",
+  "MACOS_DESKTOP",
+  "WINDOWS_DESKTOP",
+  "LINUX_DESKTOP",
+  "IOS_CAPACITOR",
+  "ANDROID_CAPACITOR",
+]);
+
+export const NotificationCategorySchema = z.enum([
+  "TOOL_APPROVAL",
+  "BRIDGE_APPROVAL",
+  "SWARM_APPROVAL",
+  "WORKFLOW_APPROVAL",
+  "AGENT_RUN_COMPLETED",
+  "AGENT_RUN_FAILED",
+  "WORKFLOW_COMPLETED",
+  "WORKFLOW_FAILED",
+  "DEVICE_STATUS",
+]);
+
+export const RegisterNotificationDeviceSchema = z.object({
+  workspaceId: z.string().uuid().optional().nullable(),
+  platform: ClientPlatformSchema,
+  deviceLabel: z.string().trim().min(1).max(128),
+  pushProvider: z.enum(["webpush", "fcm", "apns", "tauri"]),
+  pushEndpoint: z.string().trim().url().max(2048).optional().nullable(),
+  pushP256dh: z.string().trim().max(512).optional().nullable(),
+  pushAuth: z.string().trim().max(512).optional().nullable(),
+  nativePushToken: z.string().trim().min(8).max(2048).optional().nullable(),
+  appVersion: z.string().trim().max(32).optional().nullable(),
+});
+export type RegisterNotificationDeviceDto = z.infer<typeof RegisterNotificationDeviceSchema>;
+
+export const UpdateNotificationPreferencesSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  inAppEnabled: z.boolean().optional(),
+  webPushEnabled: z.boolean().optional(),
+  desktopEnabled: z.boolean().optional(),
+  mobilePushEnabled: z.boolean().optional(),
+  notifyApprovals: z.boolean().optional(),
+  notifyCompletions: z.boolean().optional(),
+  notifyFailures: z.boolean().optional(),
+  notifyDeviceStatus: z.boolean().optional(),
+  quietHoursStart: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+  quietHoursEnd: z.string().regex(/^\d{2}:\d{2}$/).optional().nullable(),
+});
+export type UpdateNotificationPreferencesDto = z.infer<typeof UpdateNotificationPreferencesSchema>;
+
+export const MarkNotificationsReadSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  notificationIds: z.array(z.string().uuid()).max(100).optional(),
+  markAll: z.boolean().default(false),
+});
+export type MarkNotificationsReadDto = z.infer<typeof MarkNotificationsReadSchema>;
+
+export const AuditLogQuerySchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  action: z.string().trim().max(64).optional(),
+  resourceType: z.string().trim().max(64).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  cursor: z.string().uuid().optional(),
+});
+export type AuditLogQueryDto = z.infer<typeof AuditLogQuerySchema>;

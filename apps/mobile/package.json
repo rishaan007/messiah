@@ -1,0 +1,34 @@
+{
+  "name": "@messiah/mobile",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MESSIAH Native Mobile Wrapper (Capacitor iOS & Android + Offline/Deep-Link Bridge)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "test": "vitest run",
+    "cap:sync": "cap sync"
+  },
+  "dependencies": {
+    "@capacitor/app": "^8.0.0",
+    "@capacitor/core": "^8.6.3",
+    "@capacitor/haptics": "^8.0.0",
+    "@capacitor/network": "^8.0.0",
+    "@capacitor/push-notifications": "^8.0.0",
+    "@capacitor/status-bar": "^8.0.0",
+    "@messiah/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.3",
+    "@messiah/config": "workspace:*",
+    "@types/node": "^24.0.0",
+    "eslint": "^9.21.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.7"
+  }
+}

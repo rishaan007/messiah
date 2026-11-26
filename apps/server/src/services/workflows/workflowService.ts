@@ -905,6 +905,22 @@ export class WorkflowService {
       },
     });
 
+    import("../notifications/index.js")
+      .then(({ notificationStreamPublisher }) =>
+        notificationStreamPublisher.publish({
+          type: "approval.resolved",
+          workspaceId: params.workspaceId,
+          payload: {
+            kind: "WORKFLOW_GATE",
+            resourceId: params.approvalId,
+            decision: params.decision,
+            runId: txRes.run.id,
+          },
+          timestamp: new Date().toISOString(),
+        })
+      )
+      .catch(() => {});
+
     await chatQueueManager
       .enqueueWorkflowRun(
         {

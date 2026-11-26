@@ -1,7 +1,7 @@
 # MESSIAH — The Universal AI Agent Workspace
 
 > **Tagline:** One intelligence layer. Every agent. Every device.  
-> **Stage:** Phase 4B Complete — Local Agent Execution, Workstation Sandboxing & Cross-Device Control  
+> **Stage:** v1.0.0 (`Phase 7 Complete` — Cross-Platform Clients, Production Hardening & Release)  
 > **License:** UNLICENSED (Proprietary)
 
 ---
@@ -31,32 +31,33 @@ Messiah is structured as a **Turborepo** monorepo managed with **pnpm workspaces
 ```
 messiah/
 ├── apps/
-│   ├── bridge-daemon/               # Lightweight Local Agent Bridge CLI daemon (messiah-bridge)
-│   ├── web/                         # Next.js 16 (React 19) Command Center Web UI
-│   │   ├── app/                     # App Router pages (/login, /signup, /chat, /settings/mcp, /settings/devices)
-│   │   ├── components/              # ChatWorkspace, MarkdownRenderer, Header, Sidebar
-│   │   └── lib/                     # Supabase client, auth helpers, API clients
-│   ├── worker/                      # BullMQ background chat execution worker
-│   └── server/                      # Fastify 5 Modular Monolith API Gateway
-│       ├── src/config/              # Strict environment validation (Zod)
-│       ├── src/plugins/             # Security (Cors, Helmet), Prisma, Redis, Auth, WebSocket
-│       ├── src/routes/              # /threads*, /runs*, /realtime*, /providers*, /mcp*, /devices*, /workspaces*
-│       ├── src/services/            # ChatService, McpServerService, DeviceServices, VaultService
-│       └── src/tests/               # Vitest test suites (227 passing tests across monorepo)
+│   ├── bridge-daemon/               # Local Agent Bridge daemon (messiah-bridge) + Win32 AppContainer source
+│   ├── desktop/                     # Tauri 2 Desktop Client (macOS / Windows / Linux, Tray, Keychain, Updater)
+│   ├── mobile/                      # Capacitor 8 Mobile Native Shell (iOS / iPadOS / Android)
+│   ├── web/                         # Next.js 16 (React 19) Command Center Web UI + Installable PWA
+│   │   ├── app/                     # Chat, Agents, Swarms, Memory, Workflows, Approvals, Audit, Settings
+│   │   ├── components/              # ChatWorkspace, SwarmConstellation3D, WorkflowCanvas, MobileBottomNav
+│   │   └── lib/                     # Supabase client, offlineDrafts, pwa, desktopBridge, API clients
+│   ├── worker/                      # BullMQ execution worker, Outbox dispatcher & Cron scheduler
+│   └── server/                      # Fastify 5 API Gateway, WebSocket hub & /metrics exporter
 ├── packages/
+│   ├── agents/                      # Multi-Agent Swarm DAG planner & runtime
+│   ├── memory/                      # Vector memory engine (pgvector + lexical fallback + sanitizer)
+│   ├── workflows/                   # Visual Workflow DAG compiler, cron engine & AST evaluator
 │   ├── mcp/                         # Model Context Protocol SDK v2, SSRF security & registry
-│   ├── providers/                   # Official AI SDK adapters (OpenAI, Anthropic, Gemini)
-│   ├── shared/                      # Canonical TypeScript types, schemas, and enums
+│   ├── providers/                   # Official AI SDK adapters (OpenAI, Anthropic, Gemini) + embeddings
+│   ├── shared/                      # Canonical TypeScript types, Zod schemas, and enums
 │   ├── config/                      # Base TypeScript and ESLint configs
 │   ├── ui/                          # Reusable UI primitives, design tokens & components
-│   └── db/                          # Prisma ORM schema, client singleton & migrations
-├── docs/                            # Architectural specs, CHAT_ENGINE.md, REALTIME_PROTOCOL.md
-├── infrastructure/                  # Local and production infrastructure manifests
-├── docker-compose.yml               # Local PostgreSQL 16 & Redis 7.2 stack
-├── pnpm-workspace.yaml              # Workspace directory mappings
-├── turbo.json                       # Turborepo task pipeline configuration
-├── package.json                     # Monorepo root scripts
-└── README.md
+│   └── db/                          # Prisma ORM schema, migrations (through 10_notifications_push_and_sessions)
+├── docs/                            # Architectural specs, Deployment Guide, Troubleshooting & Delivery Reports
+├── infrastructure/
+│   ├── production/                  # Production Docker Compose, Nginx TLS/WS proxy & Prometheus config
+│   └── scripts/                     # PostgreSQL + pgvector backup & verified restore scripts
+├── .env.{example,staging.example,production.example}
+├── .github/workflows/ci-release.yml # Multi-platform CI & signed release pipeline
+├── docker-compose.yml               # Local PostgreSQL 16 (pgvector/pgvector:pg16) & Redis 7.2 stack
+└── package.json                     # Monorepo root scripts
 ```
 
 ---
@@ -271,8 +272,8 @@ All provider management endpoints require `Authorization: Bearer <token>`:
 | **Phase 3B**  | **COMPLETE** | Controlled MCP tool execution, multi-turn ReAct agent loop, human approvals (5m TTL).|
 | **Phase 4A**  | **COMPLETE** | Local Agent Bridge daemon, outbound WSS pairing, Ed25519 device identity.           |
 | **Phase 4B**  | **COMPLETE** | Workstation sandboxing, PathGuard containment, local stdio MCP, cross-device UI.     |
-| **Phase 5**   | Pending      | Multi-Agent Swarms, 3D WebGL Constellation with 2D fallback.                         |
-| **Phase 6**   | Pending      | Vector memory (pgvector), workflow automation DAG engine.                            |
-| **Phase 7**   | Pending      | Native cross-platform packaging, production security audit.                          |
+| **Phase 5**   | **COMPLETE** | Multi-Agent Swarms, 3D WebGL Constellation with accessible 2D fallback.            |
+| **Phase 6**   | **COMPLETE** | Vector memory (`pgvector`), durable DAG workflow engine, cron & event triggers.      |
+| **Phase 7**   | **COMPLETE** | Tauri 2 desktop, PWA & Capacitor mobile shell, notifications, hardening & v1.0.0 release. |
 
-> **Current Verification Scope**: Phase 4B is complete and verified across all 10 monorepo packages with **274 automated tests passing** (`@messiah/server`: 138, `@messiah/mcp`: 43, `@messiah/bridge-daemon`: 40, `@messiah/providers`: 35, `@messiah/web`: 14, `@messiah/worker`: 4). Multi-agent swarms and vector memory remain in subsequent phases.
+> **Current Verification Scope**: **v1.0.0 (Phase 7) Complete** — **51/51** Turborepo `lint`, `typecheck`, `build`, and `test` tasks pass across all 15 workspace packages with **315 automated tests passing** (`313/313` Vitest across `32` test files + `2/2` Tauri Rust tests). Production deployment, operations, and release guides live in [`docs/DEPLOYMENT_PRODUCTION.md`](file:///Users/rishaankumar/Desktop/messiah/docs/DEPLOYMENT_PRODUCTION.md) and [`docs/PHASE_7_DELIVERY_REPORT.md`](file:///Users/rishaankumar/Desktop/messiah/docs/PHASE_7_DELIVERY_REPORT.md).

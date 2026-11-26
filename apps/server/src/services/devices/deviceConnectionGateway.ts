@@ -363,6 +363,30 @@ export class DeviceConnectionGateway {
           // Provision or retrieve unique per-device 256-bit HMAC task signing key
           const signingKeyInfo = await taskAuthorizationService.provisionOrGetDeviceSigningKey(device.id);
 
+          import("../notifications/index.js")
+            .then(({ notificationService, notificationStreamPublisher }) => {
+              notificationStreamPublisher
+                .publish({
+                  type: "device.status_changed",
+                  workspaceId: device.workspaceId,
+                  payload: { deviceId: device.id, status: "ONLINE", displayName: device.displayName },
+                  timestamp: new Date().toISOString(),
+                })
+                .catch(() => {});
+              return notificationService.emitWorkspaceNotification({
+                workspaceId: device.workspaceId,
+                category: "DEVICE_STATUS",
+                title: `Workstation Online: ${device.displayName}`,
+                preview: `${device.platform} (${device.architecture}) Local Agent Bridge connected cleanly.`,
+                resourceType: "bridge_device",
+                resourceId: device.id,
+                deepLink: `/settings/devices`,
+                dedupKey: `device-online-${device.id}-${session.id}`,
+                specificUserId: device.ownerUserId,
+              });
+            })
+            .catch(() => {});
+
           // Send auth success with per-device HMAC signing key over authenticated TLS/WSS channel
           const successFrame: ServerAuthSuccessFrame = {
             type: "device.auth.success",
@@ -500,6 +524,27 @@ export class DeviceConnectionGateway {
                 where: { id: task.id },
                 data: { status: "AWAITING_APPROVAL" },
               }).catch(() => {});
+
+              import("../notifications/index.js")
+                .then(({ notificationService }) =>
+                  notificationService.emitWorkspaceNotification({
+                    workspaceId: task.workspaceId,
+                    category: "BRIDGE_APPROVAL",
+                    title: `Workstation Approval: ${task.capability}`,
+                    preview: frame.summary || `Sensitive workstation action '${task.capability}' requires sign-off.`,
+                    resourceType: "bridge_task",
+                    resourceId: task.id,
+                    deepLink: `/approvals?kind=BRIDGE_TASK&id=${task.id}`,
+                    dedupKey: `bridge-approval-${task.id}`,
+                    expiresAt: new Date(frame.expiresAt),
+                    approversOnly: true,
+                    metadata: {
+                      deviceId: task.deviceId,
+                      capability: task.capability,
+                    },
+                  })
+                )
+                .catch(() => {});
             }
             break;
           }

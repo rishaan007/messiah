@@ -1,0 +1,45 @@
+# Version control & local secrets
+.git
+.gitignore
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production
+.env.production.local
+.env.staging
+
+# Dependencies & caches
+node_modules
+**/node_modules
+.pnpm-store
+.turbo
+*.tsbuildinfo
+
+# Build & native artifacts
+.next
+**/.next
+dist
+**/dist
+build
+out
+coverage
+.nyc_output
+apps/desktop/src-tauri/target
+apps/bridge-daemon/native/win-appcontainer-helper/build
+apps/mobile/ios
+apps/mobile/android
+
+# Data dumps & backups
+*.db
+*.db-journal
+*.dump
+backups
+postgres_data
+redis_data
+
+# Logs & OS artifacts
+logs
+*.log
+.DS_Store
+Thumbs.db

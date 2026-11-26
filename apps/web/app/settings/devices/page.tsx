@@ -29,6 +29,7 @@ import {
 } from "@messiah/ui";
 import { Header } from "@/components/Header";
 import { Sidebar } from "@/components/Sidebar";
+import { DesktopRuntimePanel } from "@/components/DesktopRuntimePanel";
 import { createClient } from "@/lib/supabase/client";
 import type {
   BridgeDeviceInfo,
@@ -515,6 +516,9 @@ export default function DevicesSettingsPage() {
                 </button>
               </div>
             )}
+
+            {/* Tauri Desktop & Bridge Lifecycle Controls */}
+            <DesktopRuntimePanel />
 
             {/* Metrics Overview Cards */}
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
