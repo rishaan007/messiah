@@ -17,6 +17,7 @@
     "@fastify/rate-limit": "^10.2.2",
     "@fastify/sensible": "^6.0.3",
     "@fastify/websocket": "^11.3.7",
+    "@messiah/agents": "workspace:*",
     "@messiah/db": "workspace:*",
     "@messiah/mcp": "workspace:*",
     "@messiah/providers": "workspace:*",

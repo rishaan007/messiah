@@ -1,6 +1,7 @@
 import { Worker, type ConnectionOptions, type Job } from "bullmq";
 import { Redis } from "ioredis";
 import { prisma } from "@messiah/db";
+import { SwarmExecutionRuntime, type SwarmJobPayload } from "@messiah/agents";
 import { defaultProviderRegistry, type ProviderChatMessage } from "@messiah/providers";
 import type { MessiahStreamEvent, SupportedProviderId, WorkspaceRole } from "@messiah/shared";
 import {
@@ -10,6 +11,7 @@ import {
 import { CHAT_GENERATION_QUEUE_NAME } from "./dispatcher.js";
 import { WorkerCancellationSubscriber } from "./cancellationSubscriber.js";
 import { workerToolExecutor } from "./toolExecutor.js";
+import { VaultService } from "./vault.js";
 
 export interface GenerationJobData {
   runId: string;
@@ -60,9 +62,71 @@ export class ChatGenerationWorker {
       maxRetriesPerRequest: null,
     };
 
+    const swarmRuntime = new SwarmExecutionRuntime({
+      decryptProviderSecret: (input) =>
+        VaultService.decrypt(
+          input.ciphertext,
+          input.initializationVector,
+          input.authenticationTag,
+          input.providerConnectionId,
+          input.workspaceId,
+          input.keyVersion
+        ),
+      decryptMcpSecret: (encryptedValue, context) => {
+        const parsed = JSON.parse(encryptedValue) as {
+          ciphertext: string;
+          initializationVector?: string;
+          authenticationTag?: string;
+          iv?: string;
+          tag?: string;
+        };
+        return VaultService.decrypt(
+          parsed.ciphertext,
+          parsed.initializationVector || parsed.iv || "",
+          parsed.authenticationTag || parsed.tag || "",
+          context.connectionId,
+          context.workspaceId,
+          context.keyVersion
+        );
+      },
+      publishEvent: async (event) => {
+        if (!this.redisPublisher) return;
+        await this.redisPublisher
+          .publish(`messiah:swarms:${event.runId}:events`, JSON.stringify(event))
+          .catch(() => {});
+      },
+      publishThreadMessageUpdate: async ({ threadId, assistantMessageId, runId, status, content }) => {
+        await prisma.message
+          .update({
+            where: { id: assistantMessageId },
+            data: { content, status, completedAt: new Date() },
+          })
+          .catch(() => {});
+
+        await this.publishEvent(threadId, {
+          type: "message.snapshot",
+          threadId,
+          runId,
+          messageId: assistantMessageId,
+          sequence: 1,
+          timestamp: new Date().toISOString(),
+          payload: { content, status },
+        });
+      },
+      isCancellationRequested: async (runId) => {
+        const signal = this.cancellationSub.register(runId);
+        return signal.aborted;
+      },
+    });
+
     this.worker = new Worker<GenerationJobData>(
       CHAT_GENERATION_QUEUE_NAME,
       async (job: Job<GenerationJobData>) => {
+        const maybeSwarm = job.data as unknown as SwarmJobPayload;
+        if (job.name === "swarm.execute" || maybeSwarm?.kind === "swarm.execute") {
+          await swarmRuntime.processJob(maybeSwarm);
+          return;
+        }
         await this.processJob(job.data);
       },
       {

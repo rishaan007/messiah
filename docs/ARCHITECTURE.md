@@ -627,17 +627,33 @@ Phase 4B connects Messiah's Local Agent Bridge (`apps/bridge-daemon`) to genuine
 
 1. **Signed Task Authorization (`TaskAuthorizationService`)**:
    - Server generates HMAC-SHA256 signed envelopes over canonical payload `MESSIAH_TASK_AUTH:...` with 256-bit `nonce`, `argumentsHash`, `resourceScopes`, and TTL.
-   - Local daemon validates signature, TTL, and unused nonce via `ReplayGuard` before touching any capability.
+   - Local daemon validates signature, TTL, and unused nonce via `ReplayGuard` (with fail-closed SHA-256 integrity checks) before touching any capability.
 2. **Workstation Capability Broker (13 Capabilities)**:
    - Granular capability dispatch covering filesystem (`list`, `read`, `search`, `create`, `modify`, `delete`), local stdio MCP (`discover`, `invoke`), sandboxed process execution (`run`, `inspect`), and workstation subagents (`start`, `status`, `cancel`).
 3. **Canonical Path Containment (`PathGuard`)**:
-   - Realpath canonical resolution (`realpathSync`) preventing symlink escapes and `../` traversal outside approved project roots, plus sensitive credential path exclusions (`.ssh`, `.aws`, `.gcp`, `.env`, keychains).
+   - Realpath canonical resolution (`realpathSync`) and `lstatSync` segment traversal preventing symlink escapes and `../` traversal outside approved project roots, plus sensitive credential path exclusions (`.ssh`, `.aws`, `.gcp`, `.env`, keychains).
    - Optimistic concurrency control (`expectedPreviousSha256`) on atomic file writes.
 4. **Workstation Process Sandboxing (`ProcessSandbox`)**:
-   - Zero shell interpolation (`shell: false` with strict argument arrays), stripped sensitive host env variables, enforced memory/process ceilings, 1MB output truncation, and `SIGKILL` process-tree cleanup on timeout/cancel.
+   - Zero shell interpolation (`shell: false` with strict argument arrays), stripped sensitive host env variables, scoped destination/port network allowlists (`networkAllowedHosts` / `networkAllowedPorts`) blocking blanket unrestricted egress, enforced memory/process ceilings, 1MB output truncation, and `SIGKILL` process-tree cleanup on timeout/cancel.
 5. **Cross-Device Control & Review (`apps/web`)**:
    - Real-time capability and policy configurator at `/settings/devices/[deviceId]/capabilities`.
    - Execution target selector in `ChatWorkspace` enabling users on phones/tablets/other browsers to direct tasks to paired online workstations with live `stdout`/`stderr` streaming and single-use human approval governance.
+
+---
+
+## 17. Multi-Agent Orchestration & Swarm Topology (Phase 5)
+
+Phase 5 introduces Supervisor–Worker multi-agent orchestration inside `@messiah/agents`, integrated directly with Messiah's existing BullMQ queue (`messiah-chat-generation`), Transactional Outbox (`swarm.dispatch` / `swarm.resume`), MCP execution engine, Local Agent Bridge, and WebSocket gateway (`/api/v1/realtime`):
+
+1. **Agent Registry & Configuration Snapshotting (`/api/v1/agents`)**:
+   - Full workspace-scoped CRUD, starter templates (`supervisor`, `research`, `developer`, `reviewer`, `analyst`, `assistant`), non-mutating test prompt preview, duplication, archival, and immutable `AgentConfigurationVersion` snapshotting on every update.
+2. **Acyclic DAG Compiler & Planner (`SwarmDagValidator` + `SwarmPlanner`)**:
+   - Generates structured JSON execution plans validated with Zod and compiled with Kahn's topological sorting to reject cycles (`CYCLE_DETECTED`), unknown dependencies, unauthorized agent assignments, and duplicate task fingerprints.
+3. **Durable Concurrent Runtime (`SwarmExecutionRuntime`)**:
+   - Executes ready dependency waves concurrently up to `maxConcurrency`, transitions downstream tasks cleanly if upstream dependencies fail (`SKIPPED`), enforces token/cost/duration ceilings, pauses cleanly on pre-run plan approval (`AWAITING_PLAN_APPROVAL`) and MCP/Bridge human approvals (`AWAITING_APPROVAL`), and completes via bounded Supervisor synthesis into `AgentArtifact` deliverables and linked chat thread messages.
+4. **3D Agent Constellation & Accessible 2D Fallback (`apps/web`)**:
+   - Lazy-loaded Three.js WebGL constellation (`/swarms` and `/swarms/[runId]`) synchronized over live `swarm.*` WebSocket events (`swarm.subscribe` + `swarm.snapshot` reconciliation).
+   - Automatic accessible 2D SVG/list topology fallback for WebGL failures, `prefers-reduced-motion: reduce`, low-concurrency hardware, or manual toggle, plus contextual node inspector and inline Swarm launcher in `ChatWorkspace`.
 
 ---
 

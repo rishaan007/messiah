@@ -13,6 +13,8 @@ export interface LocalMcpServerConfig {
   allowedEnvKeys?: string[];
   writableMounts?: string[];
   networkPolicy?: boolean;
+  networkAllowedHosts?: string[];
+  networkAllowedPorts?: number[];
   /** Cryptographic & supply-chain pinning fields */
   pinnedExecutablePath?: string;
   pinnedExecutableSha256?: string;
@@ -49,9 +51,36 @@ export class LocalMcpRegistry {
   }
 
   public static computeFileSha256(filePath: string): string | null {
+    return this.verifyAndHashExecutable(filePath)?.sha256 || null;
+  }
+
+  /**
+   * Opens the executable file safely with O_NOFOLLOW (when not a verified symlink chain)
+   * or regular file descriptor check, verifying non-world-writable permissions and
+   * returning both SHA-256 digest and inode/device identity for TOCTOU defense.
+   */
+  public static verifyAndHashExecutable(filePath: string): {
+    sha256: string;
+    dev: number | bigint;
+    ino: number | bigint;
+  } | null {
     try {
-      const data = fs.readFileSync(filePath);
-      return crypto.createHash("sha256").update(data).digest("hex");
+      const noFollow = typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0;
+      const canonical = fs.realpathSync(filePath);
+      const fd = fs.openSync(canonical, fs.constants.O_RDONLY | noFollow);
+      try {
+        const st = fs.fstatSync(fd);
+        if (!st.isFile()) return null;
+        // Reject world-writable executables on POSIX systems
+        if (os.platform() !== "win32" && (st.mode & 0o002) !== 0) {
+          throw new Error(`Refusing world-writable executable binary: ${canonical}`);
+        }
+        const data = fs.readFileSync(fd);
+        const sha256 = crypto.createHash("sha256").update(data).digest("hex");
+        return { sha256, dev: st.dev, ino: st.ino };
+      } finally {
+        fs.closeSync(fd);
+      }
     } catch {
       return null;
     }

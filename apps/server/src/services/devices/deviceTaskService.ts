@@ -5,6 +5,7 @@ import { workspaceService } from "../workspaceService.js";
 import { devicePresenceService } from "./devicePresenceService.js";
 import { deviceConnectionGateway } from "./deviceConnectionGateway.js";
 import { taskAuthorizationService } from "./taskAuthorizationService.js";
+import { chatQueueManager } from "../chat/chatQueue.js";
 
 export class DeviceTaskError extends Error {
   constructor(
@@ -31,6 +32,8 @@ export class DeviceTaskService {
     parameters: Record<string, unknown>;
     threadId?: string;
     generationRunId?: string;
+    agentRunId?: string;
+    agentTaskId?: string;
   }) {
     const isMember = await workspaceService.isUserMember(params.workspaceId, params.userId);
     if (!isMember) {
@@ -128,6 +131,8 @@ export class DeviceTaskService {
         status: "DISPATCHED",
         threadId: params.threadId,
         generationRunId: params.generationRunId,
+        agentRunId: params.agentRunId,
+        agentTaskId: params.agentTaskId,
       },
     });
 
@@ -414,6 +419,39 @@ export class DeviceTaskService {
           where: { id: txResult.outboxEventId },
           data: { status: "PROCESSED", processedAt: new Date() },
         }).catch(() => {});
+      }
+
+      if (txResult.updatedTask.agentRunId) {
+        const swarmOutbox = await prisma.outboxEvent.create({
+          data: {
+            eventType: "swarm.resume",
+            aggregateType: "AgentRun",
+            aggregateId: txResult.updatedTask.agentRunId,
+            payload: {
+              kind: "swarm.execute",
+              runId: txResult.updatedTask.agentRunId,
+              workspaceId,
+              userId,
+            },
+            status: "PENDING",
+          },
+        });
+        await prisma.agentRun.updateMany({
+          where: { id: txResult.updatedTask.agentRunId, status: "AWAITING_APPROVAL" },
+          data: { status: "PENDING" },
+        });
+        await chatQueueManager
+          .enqueueSwarmRun(
+            {
+              kind: "swarm.execute",
+              runId: txResult.updatedTask.agentRunId,
+              workspaceId,
+              userId,
+              outboxEventId: swarmOutbox.id,
+            },
+            `swarm-${txResult.updatedTask.agentRunId}-bridge-deny-${swarmOutbox.id}`
+          )
+          .catch(() => {});
       }
     }
 

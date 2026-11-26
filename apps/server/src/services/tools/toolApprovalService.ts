@@ -341,7 +341,12 @@ export class ToolApprovalService {
       }
 
       const run = toolCall.generationRun;
-      const thread = run.thread;
+      const agentRunId = toolCall.agentRunId;
+      const thread = run?.thread;
+
+      if (!run && !agentRunId) {
+        throw new ToolApprovalServiceError("Tool call is not associated with any active run.", 400, "INVALID_RUN_STATE");
+      }
 
       // 4. Mark approval as consumed with atomic concurrency guard
       const updateCount = await tx.toolApproval.updateMany({
@@ -365,7 +370,7 @@ export class ToolApprovalService {
         where: { id: approvalId },
       });
 
-      // 5. Transition tool call to APPROVED and run to PENDING
+      // 5. Transition tool call to APPROVED and owning run to PENDING
       const updatedToolCall = await tx.toolCall.update({
         where: { id: toolCall.id },
         data: {
@@ -373,33 +378,64 @@ export class ToolApprovalService {
         },
       });
 
-      await tx.generationRun.update({
-        where: { id: run.id },
-        data: {
-          status: "PENDING",
-        },
+      if (run) {
+        await tx.generationRun.update({
+          where: { id: run.id },
+          data: {
+            status: "PENDING",
+          },
+        });
+
+        // 6. Write durable outbox event for resumption
+        const jobPayload: GenerationJobPayload = {
+          runId: run.id,
+          threadId: run.threadId,
+          workspaceId: approval.workspaceId,
+          userId: thread?.createdByUserId || decidedByUserId,
+          userMessageId: "",
+          assistantMessageId: run.assistantMessageId,
+          providerConnectionId: run.providerConnectionId,
+          provider: run.provider,
+          modelId: run.modelId,
+          content: "",
+        };
+
+        const outboxEvent = await tx.outboxEvent.create({
+          data: {
+            eventType: "generation.resume",
+            aggregateType: "GenerationRun",
+            aggregateId: run.id,
+            payload: jobPayload as any,
+            status: "PENDING",
+          },
+        });
+
+        return {
+          approval: updatedApproval,
+          toolCall: updatedToolCall,
+          run,
+          agentRunId: null as string | null,
+          outboxEvent,
+          jobPayload,
+        };
+      }
+
+      await tx.agentRun.updateMany({
+        where: { id: agentRunId!, status: "AWAITING_APPROVAL" },
+        data: { status: "PENDING" },
       });
 
-      // 6. Write durable outbox event for resumption
-      const jobPayload: GenerationJobPayload = {
-        runId: run.id,
-        threadId: run.threadId,
-        workspaceId: approval.workspaceId,
-        userId: thread?.createdByUserId || decidedByUserId,
-        userMessageId: "",
-        assistantMessageId: run.assistantMessageId,
-        providerConnectionId: run.providerConnectionId,
-        provider: run.provider,
-        modelId: run.modelId,
-        content: "",
-      };
-
-      const outboxEvent = await tx.outboxEvent.create({
+      const swarmOutbox = await tx.outboxEvent.create({
         data: {
-          eventType: "generation.resume",
-          aggregateType: "GenerationRun",
-          aggregateId: run.id,
-          payload: jobPayload as any,
+          eventType: "swarm.resume",
+          aggregateType: "AgentRun",
+          aggregateId: agentRunId!,
+          payload: {
+            kind: "swarm.execute",
+            runId: agentRunId!,
+            workspaceId: approval.workspaceId,
+            userId: decidedByUserId,
+          },
           status: "PENDING",
         },
       });
@@ -407,52 +443,68 @@ export class ToolApprovalService {
       return {
         approval: updatedApproval,
         toolCall: updatedToolCall,
-        run,
-        outboxEvent,
-        jobPayload,
+        run: null,
+        agentRunId: agentRunId!,
+        outboxEvent: swarmOutbox,
+        jobPayload: null as GenerationJobPayload | null,
       };
     });
 
-    const { approval: updatedApproval, run, outboxEvent, jobPayload } = txResult;
+    const { approval: updatedApproval, run, agentRunId, outboxEvent, jobPayload } = txResult;
 
-    // Resumption: Enqueue to BullMQ with deterministic jobId bound to outbox event
-    const resumedJobId = `${run.id}-resume-${outboxEvent.id}`;
-    chatQueueManager
-      .enqueueRun(
-        {
-          ...jobPayload,
-          outboxEventId: outboxEvent.id,
+    if (run && jobPayload) {
+      // Resumption: Enqueue to BullMQ with deterministic jobId bound to outbox event
+      const resumedJobId = `${run.id}-resume-${outboxEvent.id}`;
+      chatQueueManager
+        .enqueueRun(
+          {
+            ...jobPayload,
+            outboxEventId: outboxEvent.id,
+          },
+          resumedJobId
+        )
+        .catch((err) => {
+          console.warn(
+            `[ToolApprovalService] Immediate enqueue of resumed run ${run.id} deferred to outbox sweeper:`,
+            err
+          );
+        });
+
+      // Publish WebSocket notification
+      await streamPublisher.publish({
+        type: "tool.approval_decided",
+        threadId: txResult.toolCall.threadId || run.threadId,
+        runId: run.id,
+        messageId: txResult.toolCall.providerCallId,
+        sequence: 0,
+        timestamp: new Date().toISOString(),
+        payload: {
+          toolCall: {
+            id: txResult.toolCall.id,
+            status: "APPROVED",
+          },
+          toolApproval: {
+            id: updatedApproval.id,
+            status: "APPROVED",
+            decidedByUserId,
+            decidedAt: updatedApproval.decidedAt?.toISOString(),
+          },
         },
-        resumedJobId
-      )
-      .catch((err) => {
-        console.warn(
-          `[ToolApprovalService] Immediate enqueue of resumed run ${run.id} deferred to outbox sweeper:`,
-          err
-        );
       });
-
-    // Publish WebSocket notification
-    await streamPublisher.publish({
-      type: "tool.approval_decided",
-      threadId: txResult.toolCall.threadId,
-      runId: run.id,
-      messageId: txResult.toolCall.providerCallId,
-      sequence: 0,
-      timestamp: new Date().toISOString(),
-      payload: {
-        toolCall: {
-          id: txResult.toolCall.id,
-          status: "APPROVED",
-        },
-        toolApproval: {
-          id: updatedApproval.id,
-          status: "APPROVED",
-          decidedByUserId,
-          decidedAt: updatedApproval.decidedAt?.toISOString(),
-        },
-      },
-    });
+    } else if (agentRunId) {
+      chatQueueManager
+        .enqueueSwarmRun(
+          {
+            kind: "swarm.execute",
+            runId: agentRunId,
+            workspaceId: updatedApproval.workspaceId,
+            userId: decidedByUserId,
+            outboxEventId: outboxEvent.id,
+          },
+          `swarm-${agentRunId}-resume-${outboxEvent.id}`
+        )
+        .catch(() => {});
+    }
 
     // Audit log
     await logAuditEvent({
@@ -578,35 +630,71 @@ export class ToolApprovalService {
       });
 
       const run = toolCall.generationRun;
-      const thread = run.thread;
+      const agentRunId = toolCall.agentRunId;
+      const thread = run?.thread;
 
-      await tx.generationRun.update({
-        where: { id: run.id },
-        data: {
-          status: "PENDING",
-        },
+      if (!run && !agentRunId) {
+        throw new ToolApprovalServiceError("Tool call is not associated with any active run.", 400, "INVALID_RUN_STATE");
+      }
+
+      if (run) {
+        await tx.generationRun.update({
+          where: { id: run.id },
+          data: {
+            status: "PENDING",
+          },
+        });
+
+        // Write durable outbox event for resumption
+        const jobPayload: GenerationJobPayload = {
+          runId: run.id,
+          threadId: run.threadId,
+          workspaceId: approval.workspaceId,
+          userId: thread?.createdByUserId || decidedByUserId,
+          userMessageId: "",
+          assistantMessageId: run.assistantMessageId,
+          providerConnectionId: run.providerConnectionId,
+          provider: run.provider,
+          modelId: run.modelId,
+          content: "",
+        };
+
+        const outboxEvent = await tx.outboxEvent.create({
+          data: {
+            eventType: "generation.resume",
+            aggregateType: "GenerationRun",
+            aggregateId: run.id,
+            payload: jobPayload as any,
+            status: "PENDING",
+          },
+        });
+
+        return {
+          approval: updatedApproval,
+          toolCall: updatedToolCall,
+          run,
+          agentRunId: null as string | null,
+          outboxEvent,
+          jobPayload,
+        };
+      }
+
+      await tx.agentRun.updateMany({
+        where: { id: agentRunId!, status: "AWAITING_APPROVAL" },
+        data: { status: "PENDING" },
       });
 
-      // Write durable outbox event for resumption
-      const jobPayload: GenerationJobPayload = {
-        runId: run.id,
-        threadId: run.threadId,
-        workspaceId: approval.workspaceId,
-        userId: thread?.createdByUserId || decidedByUserId,
-        userMessageId: "",
-        assistantMessageId: run.assistantMessageId,
-        providerConnectionId: run.providerConnectionId,
-        provider: run.provider,
-        modelId: run.modelId,
-        content: "",
-      };
-
-      const outboxEvent = await tx.outboxEvent.create({
+      const swarmOutbox = await tx.outboxEvent.create({
         data: {
-          eventType: "generation.resume",
-          aggregateType: "GenerationRun",
-          aggregateId: run.id,
-          payload: jobPayload as any,
+          eventType: "swarm.resume",
+          aggregateType: "AgentRun",
+          aggregateId: agentRunId!,
+          payload: {
+            kind: "swarm.execute",
+            runId: agentRunId!,
+            workspaceId: approval.workspaceId,
+            userId: decidedByUserId,
+          },
           status: "PENDING",
         },
       });
@@ -614,53 +702,69 @@ export class ToolApprovalService {
       return {
         approval: updatedApproval,
         toolCall: updatedToolCall,
-        run,
-        outboxEvent,
-        jobPayload,
+        run: null,
+        agentRunId: agentRunId!,
+        outboxEvent: swarmOutbox,
+        jobPayload: null as GenerationJobPayload | null,
       };
     });
 
-    const { approval: updatedApproval, run, outboxEvent, jobPayload } = txResult;
+    const { approval: updatedApproval, run, agentRunId, outboxEvent, jobPayload } = txResult;
 
-    // Resumption: Enqueue to BullMQ with deterministic jobId bound to outbox event
-    const resumedJobId = `${run.id}-resume-${outboxEvent.id}`;
-    chatQueueManager
-      .enqueueRun(
-        {
-          ...jobPayload,
-          outboxEventId: outboxEvent.id,
+    if (run && jobPayload) {
+      // Resumption: Enqueue to BullMQ with deterministic jobId bound to outbox event
+      const resumedJobId = `${run.id}-resume-${outboxEvent.id}`;
+      chatQueueManager
+        .enqueueRun(
+          {
+            ...jobPayload,
+            outboxEventId: outboxEvent.id,
+          },
+          resumedJobId
+        )
+        .catch((err) => {
+          console.warn(
+            `[ToolApprovalService] Immediate enqueue of resumed run ${run.id} deferred to outbox sweeper:`,
+            err
+          );
+        });
+
+      // Publish WebSocket event
+      await streamPublisher.publish({
+        type: "tool.approval_decided",
+        threadId: txResult.toolCall.threadId || run.threadId,
+        runId: run.id,
+        messageId: txResult.toolCall.providerCallId,
+        sequence: 0,
+        timestamp: new Date().toISOString(),
+        payload: {
+          toolCall: {
+            id: txResult.toolCall.id,
+            status: "DENIED",
+            errorMessage: denialReason,
+          },
+          toolApproval: {
+            id: updatedApproval.id,
+            status: "DENIED",
+            decidedByUserId,
+            rejectionReason: denialReason,
+          },
         },
-        resumedJobId
-      )
-      .catch((err) => {
-        console.warn(
-          `[ToolApprovalService] Immediate enqueue of resumed run ${run.id} deferred to outbox sweeper:`,
-          err
-        );
       });
-
-    // Publish WebSocket event
-    await streamPublisher.publish({
-      type: "tool.approval_decided",
-      threadId: txResult.toolCall.threadId,
-      runId: run.id,
-      messageId: txResult.toolCall.providerCallId,
-      sequence: 0,
-      timestamp: new Date().toISOString(),
-      payload: {
-        toolCall: {
-          id: txResult.toolCall.id,
-          status: "DENIED",
-          errorMessage: denialReason,
-        },
-        toolApproval: {
-          id: updatedApproval.id,
-          status: "DENIED",
-          decidedByUserId,
-          rejectionReason: denialReason,
-        },
-      },
-    });
+    } else if (agentRunId) {
+      chatQueueManager
+        .enqueueSwarmRun(
+          {
+            kind: "swarm.execute",
+            runId: agentRunId,
+            workspaceId: updatedApproval.workspaceId,
+            userId: decidedByUserId,
+            outboxEventId: outboxEvent.id,
+          },
+          `swarm-${agentRunId}-resume-${outboxEvent.id}`
+        )
+        .catch(() => {});
+    }
 
     // Audit log
     await logAuditEvent({

@@ -1,6 +1,8 @@
 import { Worker, type ConnectionOptions, type Job } from "bullmq";
+import type { SwarmJobPayload } from "@messiah/agents";
 import { CHAT_GENERATION_QUEUE_NAME, type GenerationJobPayload } from "./chatQueue.js";
 import { executionEngine } from "./executionEngine.js";
+import { executeServerSwarmJob } from "../agents/swarmWorkerBridge.js";
 
 /**
  * BullMQ Worker Manager for MESSIAH chat generation.
@@ -26,6 +28,11 @@ export class ChatWorkerManager {
     this.worker = new Worker<GenerationJobPayload>(
       CHAT_GENERATION_QUEUE_NAME,
       async (job: Job<GenerationJobPayload>) => {
+        const maybeSwarm = job.data as unknown as SwarmJobPayload;
+        if (job.name === "swarm.execute" || maybeSwarm?.kind === "swarm.execute") {
+          await executeServerSwarmJob(maybeSwarm);
+          return;
+        }
         await executionEngine.execute(job.data);
       },
       {

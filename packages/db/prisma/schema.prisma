@@ -64,6 +64,9 @@ model User {
   createdBridgeTasks        BridgeTask[]           @relation("CreatedBridgeTasks")
   requestedBridgeApprovals   BridgeTaskApproval[]   @relation("RequestedBridgeApprovals")
   decidedBridgeApprovals     BridgeTaskApproval[]   @relation("DecidedBridgeApprovals")
+  createdAgents              AgentDefinition[]      @relation("CreatedAgentDefinitions")
+  createdAgentVersions       AgentConfigurationVersion[] @relation("CreatedAgentVersions")
+  createdAgentRuns           AgentRun[]             @relation("CreatedAgentRuns")
 
   @@index([externalProvider, externalId])
   @@map("users")
@@ -93,6 +96,14 @@ model Workspace {
   localMcpServers     BridgeLocalMcpServer[]
   bridgeTasks         BridgeTask[]
   bridgeTaskApprovals BridgeTaskApproval[]
+  agentDefinitions    AgentDefinition[]
+  agentConfigVersions AgentConfigurationVersion[]
+  agentRuns           AgentRun[]
+  agentTasks          AgentTask[]
+  agentExecutions     AgentExecution[]
+  agentCommunications AgentCommunication[]
+  agentArtifacts      AgentArtifact[]
+  agentRunEvents      AgentRunEvent[]
 
   @@index([ownerId])
   @@map("workspaces")
@@ -135,6 +146,8 @@ model ProviderConnection {
   threads         Thread[]
   messages        Message[]
   generationRuns  GenerationRun[]
+  agentDefinitions AgentDefinition[]
+  agentConfigVersions AgentConfigurationVersion[]
 
   @@unique([workspaceId, provider, displayName])
   @@index([workspaceId])
@@ -254,6 +267,7 @@ model Thread {
   generationRuns                GenerationRun[]
   idempotencyKeys               IdempotencyKey[]
   toolCalls                     ToolCall[]
+  agentRuns                     AgentRun[]
 
   @@index([workspaceId, archivedAt, lastMessageAt(sort: Desc)])
   @@index([workspaceId])
@@ -494,8 +508,10 @@ model McpToolPermission {
 
 model ToolCall {
   id                 String              @id @default(uuid()) @db.Uuid
-  generationRunId    String              @map("generation_run_id") @db.Uuid
-  threadId           String              @map("thread_id") @db.Uuid
+  generationRunId    String?             @map("generation_run_id") @db.Uuid
+  threadId           String?             @map("thread_id") @db.Uuid
+  agentRunId         String?             @map("agent_run_id") @db.Uuid
+  agentTaskId        String?             @map("agent_task_id") @db.Uuid
   workspaceId        String              @map("workspace_id") @db.Uuid
   toolDefinitionId   String              @map("tool_definition_id") @db.Uuid
   providerCallId     String              @map("provider_call_id") @db.VarChar(128)
@@ -516,8 +532,10 @@ model ToolCall {
   updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   // Relations
-  generationRun      GenerationRun       @relation(fields: [generationRunId], references: [id], onDelete: Cascade)
-  thread             Thread              @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  generationRun      GenerationRun?      @relation(fields: [generationRunId], references: [id], onDelete: Cascade)
+  thread             Thread?             @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  agentRun           AgentRun?           @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  agentTask          AgentTask?          @relation(fields: [agentTaskId], references: [id], onDelete: Cascade)
   workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   toolDefinition     McpToolDefinition   @relation(fields: [toolDefinitionId], references: [id], onDelete: Cascade)
   connection         McpServerConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
@@ -525,6 +543,8 @@ model ToolCall {
 
   @@index([generationRunId])
   @@index([threadId])
+  @@index([agentRunId])
+  @@index([agentTaskId])
   @@index([workspaceId, status])
   @@index([toolDefinitionId])
   @@index([connectionId])
@@ -608,6 +628,8 @@ model BridgeDevice {
   localMcpServers      BridgeLocalMcpServer[]
   tasks                BridgeTask[]
   taskApprovals        BridgeTaskApproval[]
+  preferredAgents      AgentDefinition[]
+  assignedAgentTasks   AgentTask[]
 
   @@index([workspaceId, status])
   @@index([publicKeyFingerprint])
@@ -728,6 +750,8 @@ model BridgeTask {
   userId          String               @map("user_id") @db.Uuid
   threadId        String?              @map("thread_id") @db.Uuid
   generationRunId String?              @map("generation_run_id") @db.Uuid
+  agentRunId      String?              @map("agent_run_id") @db.Uuid
+  agentTaskId     String?              @map("agent_task_id") @db.Uuid
   capability      String               @db.VarChar(64)
   resourceScopes  String[]             @default([]) @map("resource_scopes")
   parameters      Json                 @default("{}") @db.JsonB
@@ -748,12 +772,16 @@ model BridgeTask {
   workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   device          BridgeDevice         @relation(fields: [deviceId], references: [id], onDelete: Cascade)
   user            User                 @relation("CreatedBridgeTasks", fields: [userId], references: [id], onDelete: Cascade)
+  agentRun        AgentRun?            @relation(fields: [agentRunId], references: [id], onDelete: Cascade)
+  agentTask       AgentTask?           @relation(fields: [agentTaskId], references: [id], onDelete: Cascade)
   approval        BridgeTaskApproval?
   logs            BridgeTaskLog[]
 
   @@index([deviceId, status])
   @@index([workspaceId, status])
   @@index([threadId])
+  @@index([agentRunId])
+  @@index([agentTaskId])
   @@index([expiresAt])
   @@map("bridge_tasks")
 }
@@ -808,4 +836,326 @@ model BridgeTaskLog {
 
   @@index([taskId, sequence])
   @@map("bridge_task_logs")
+}
+
+// ==============================================================================
+// 11. MULTI-AGENT ORCHESTRATION & SWARM TOPOLOGY (PHASE 5)
+// ==============================================================================
+
+enum AgentStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+enum AgentRunStatus {
+  PENDING
+  PLANNING
+  AWAITING_PLAN_APPROVAL
+  RUNNING
+  AWAITING_APPROVAL
+  SYNTHESIZING
+  COMPLETED
+  PARTIAL_COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AgentTaskStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  AWAITING_APPROVAL
+  COMPLETED
+  FAILED
+  CANCELLED
+  SKIPPED
+  UNKNOWN_OUTCOME
+}
+
+enum AgentExecutionStatus {
+  RUNNING
+  AWAITING_APPROVAL
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  UNKNOWN_OUTCOME
+}
+
+model AgentDefinition {
+  id                        String                     @id @default(uuid()) @db.Uuid
+  workspaceId               String                     @map("workspace_id") @db.Uuid
+  createdByUserId           String?                    @map("created_by_user_id") @db.Uuid
+  name                      String                     @db.VarChar(128)
+  slug                      String                     @db.VarChar(128)
+  roleTitle                 String                     @map("role_title") @db.VarChar(128)
+  category                  String                     @default("custom") @db.VarChar(64)
+  description               String?                    @db.Text
+  avatarAccent              String?                    @map("avatar_accent") @db.VarChar(32)
+  isTemplate                Boolean                    @default(false) @map("is_template")
+  canSupervise              Boolean                    @default(false) @map("can_supervise")
+  status                    AgentStatus                @default(ACTIVE)
+  activeVersion             Int                        @default(1) @map("active_version")
+  providerConnectionId      String?                    @map("provider_connection_id") @db.Uuid
+  modelId                   String?                    @map("model_id") @db.VarChar(128)
+  systemPrompt              String                     @map("system_prompt") @db.Text
+  temperature               Float                      @default(0.3)
+  maxOutputTokens           Int                        @default(4096) @map("max_output_tokens")
+  allowedMcpToolIds         String[]                   @default([]) @map("allowed_mcp_tool_ids")
+  allowedBridgeCapabilities String[]                   @default([]) @map("allowed_bridge_capabilities")
+  preferredBridgeDeviceId   String?                    @map("preferred_bridge_device_id") @db.Uuid
+  defaultExecutionBudget    Json                       @default("{}") @map("default_execution_budget") @db.JsonB
+  createdAt                 DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace                 Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser             User?                      @relation("CreatedAgentDefinitions", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  providerConnection        ProviderConnection?        @relation(fields: [providerConnectionId], references: [id], onDelete: SetNull)
+  preferredBridgeDevice     BridgeDevice?              @relation(fields: [preferredBridgeDeviceId], references: [id], onDelete: SetNull)
+  versions                  AgentConfigurationVersion[]
+  supervisedRuns            AgentRun[]                 @relation("SupervisorAgent")
+  assignedTasks             AgentTask[]                @relation("AssignedAgent")
+  executions                AgentExecution[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@index([workspaceId, canSupervise])
+  @@map("agent_definitions")
+}
+
+model AgentConfigurationVersion {
+  id                        String              @id @default(uuid()) @db.Uuid
+  agentDefinitionId         String              @map("agent_definition_id") @db.Uuid
+  workspaceId               String              @map("workspace_id") @db.Uuid
+  versionNumber             Int                 @map("version_number")
+  name                      String              @db.VarChar(128)
+  roleTitle                 String              @map("role_title") @db.VarChar(128)
+  canSupervise              Boolean             @default(false) @map("can_supervise")
+  providerConnectionId      String?             @map("provider_connection_id") @db.Uuid
+  modelId                   String?             @map("model_id") @db.VarChar(128)
+  systemPrompt              String              @map("system_prompt") @db.Text
+  temperature               Float               @default(0.3)
+  maxOutputTokens           Int                 @default(4096) @map("max_output_tokens")
+  allowedMcpToolIds         String[]            @default([]) @map("allowed_mcp_tool_ids")
+  allowedBridgeCapabilities String[]            @default([]) @map("allowed_bridge_capabilities")
+  preferredBridgeDeviceId   String?             @map("preferred_bridge_device_id") @db.Uuid
+  executionBudget           Json                @default("{}") @map("execution_budget") @db.JsonB
+  configHash                String              @map("config_hash") @db.VarChar(64)
+  createdByUserId           String?             @map("created_by_user_id") @db.Uuid
+  createdAt                 DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  agentDefinition           AgentDefinition     @relation(fields: [agentDefinitionId], references: [id], onDelete: Cascade)
+  workspace                 Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  providerConnection        ProviderConnection? @relation(fields: [providerConnectionId], references: [id], onDelete: SetNull)
+  createdByUser             User?               @relation("CreatedAgentVersions", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  supervisorRuns            AgentRun[]          @relation("SupervisorVersion")
+  assignedTasks             AgentTask[]         @relation("AssignedTaskVersion")
+  executions                AgentExecution[]
+
+  @@unique([agentDefinitionId, versionNumber])
+  @@index([workspaceId, agentDefinitionId])
+  @@map("agent_configuration_versions")
+}
+
+model AgentRun {
+  id                      String                     @id @default(uuid()) @db.Uuid
+  workspaceId             String                     @map("workspace_id") @db.Uuid
+  createdByUserId         String?                    @map("created_by_user_id") @db.Uuid
+  threadId                String?                    @map("thread_id") @db.Uuid
+  assistantMessageId      String?                    @map("assistant_message_id") @db.Uuid
+  supervisorAgentId       String                     @map("supervisor_agent_id") @db.Uuid
+  supervisorVersionId     String?                    @map("supervisor_version_id") @db.Uuid
+  workerAgentIds          String[]                   @default([]) @map("worker_agent_ids")
+  objective               String                     @db.Text
+  status                  AgentRunStatus             @default(PENDING)
+  requirePlanApproval     Boolean                    @default(false) @map("require_plan_approval")
+  planApprovedAt          DateTime?                  @map("plan_approved_at") @db.Timestamptz(6)
+  planJson                Json?                      @map("plan_json") @db.JsonB
+  maxTotalTokens          Int                        @default(120000) @map("max_total_tokens")
+  maxCostUsd              Float                      @default(2.0) @map("max_cost_usd")
+  maxDurationMs           Int                        @default(300000) @map("max_duration_ms")
+  maxConcurrency          Int                        @default(3) @map("max_concurrency")
+  maxDelegationDepth      Int                        @default(2) @map("max_delegation_depth")
+  maxReplanRounds         Int                        @default(1) @map("max_replan_rounds")
+  replanCount             Int                        @default(0) @map("replan_count")
+  inputTokens             Int                        @default(0) @map("input_tokens")
+  outputTokens            Int                        @default(0) @map("output_tokens")
+  estimatedCostUsd        Float                      @default(0) @map("estimated_cost_usd")
+  finalSummary            String?                    @map("final_summary") @db.Text
+  safeErrorCode           String?                    @map("safe_error_code") @db.VarChar(64)
+  errorMessage            String?                    @map("error_message") @db.Text
+  cancellationRequestedAt DateTime?                  @map("cancellation_requested_at") @db.Timestamptz(6)
+  startedAt               DateTime?                  @map("started_at") @db.Timestamptz(6)
+  completedAt             DateTime?                  @map("completed_at") @db.Timestamptz(6)
+  createdAt               DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace               Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser           User?                      @relation("CreatedAgentRuns", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  thread                  Thread?                    @relation(fields: [threadId], references: [id], onDelete: SetNull)
+  supervisorAgent         AgentDefinition            @relation("SupervisorAgent", fields: [supervisorAgentId], references: [id], onDelete: Restrict)
+  supervisorVersion       AgentConfigurationVersion? @relation("SupervisorVersion", fields: [supervisorVersionId], references: [id], onDelete: SetNull)
+  tasks                   AgentTask[]
+  executions              AgentExecution[]
+  communications          AgentCommunication[]
+  artifacts               AgentArtifact[]
+  events                  AgentRunEvent[]
+  toolCalls               ToolCall[]
+  bridgeTasks             BridgeTask[]
+
+  @@index([workspaceId, status])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([threadId])
+  @@map("agent_runs")
+}
+
+model AgentTask {
+  id                   String                     @id @default(uuid()) @db.Uuid
+  runId                String                     @map("run_id") @db.Uuid
+  workspaceId          String                     @map("workspace_id") @db.Uuid
+  taskKey              String                     @map("task_key") @db.VarChar(64)
+  title                String                     @db.VarChar(160)
+  instructions         String                     @db.Text
+  assignedAgentId      String                     @map("assigned_agent_id") @db.Uuid
+  assignedVersionId    String?                    @map("assigned_version_id") @db.Uuid
+  dependsOnKeys        String[]                   @default([]) @map("depends_on_keys")
+  inputTaskKeys        String[]                   @default([]) @map("input_task_keys")
+  delegationDepth      Int                        @default(1) @map("delegation_depth")
+  fingerprint          String                     @db.VarChar(64)
+  status               AgentTaskStatus            @default(PENDING)
+  priority             Int                        @default(0)
+  maxIterations        Int                        @default(4) @map("max_iterations")
+  targetBridgeDeviceId String?                    @map("target_bridge_device_id") @db.Uuid
+  outputSummary        String?                    @map("output_summary") @db.Text
+  outputData           Json?                      @map("output_data") @db.JsonB
+  errorCode            String?                    @map("error_code") @db.VarChar(64)
+  errorMessage         String?                    @map("error_message") @db.Text
+  inputTokens          Int                        @default(0) @map("input_tokens")
+  outputTokens         Int                        @default(0) @map("output_tokens")
+  attemptCount         Int                        @default(0) @map("attempt_count")
+  startedAt            DateTime?                  @map("started_at") @db.Timestamptz(6)
+  completedAt          DateTime?                  @map("completed_at") @db.Timestamptz(6)
+  createdAt            DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  run                  AgentRun                   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  workspace            Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignedAgent        AgentDefinition            @relation("AssignedAgent", fields: [assignedAgentId], references: [id], onDelete: Restrict)
+  assignedVersion      AgentConfigurationVersion? @relation("AssignedTaskVersion", fields: [assignedVersionId], references: [id], onDelete: SetNull)
+  targetBridgeDevice   BridgeDevice?              @relation(fields: [targetBridgeDeviceId], references: [id], onDelete: SetNull)
+  executions           AgentExecution[]
+  communications       AgentCommunication[]
+  artifacts            AgentArtifact[]
+  toolCalls            ToolCall[]
+  bridgeTasks          BridgeTask[]
+
+  @@unique([runId, taskKey])
+  @@index([runId, status])
+  @@index([runId, fingerprint])
+  @@index([workspaceId, assignedAgentId])
+  @@map("agent_tasks")
+}
+
+model AgentExecution {
+  id                   String                     @id @default(uuid()) @db.Uuid
+  runId                String                     @map("run_id") @db.Uuid
+  taskId               String?                    @map("task_id") @db.Uuid
+  workspaceId          String                     @map("workspace_id") @db.Uuid
+  agentId              String                     @map("agent_id") @db.Uuid
+  versionId            String?                    @map("version_id") @db.Uuid
+  phase                String                     @db.VarChar(32)
+  status               AgentExecutionStatus       @default(RUNNING)
+  providerConnectionId String?                    @map("provider_connection_id") @db.Uuid
+  modelId              String?                    @map("model_id") @db.VarChar(128)
+  iterationsUsed       Int                        @default(0) @map("iterations_used")
+  toolCallIds          String[]                   @default([]) @map("tool_call_ids")
+  bridgeTaskIds        String[]                   @default([]) @map("bridge_task_ids")
+  inputTokens          Int                        @default(0) @map("input_tokens")
+  outputTokens         Int                        @default(0) @map("output_tokens")
+  durationMs           Int?                       @map("duration_ms")
+  resultSummary        String?                    @map("result_summary") @db.Text
+  errorMessage         String?                    @map("error_message") @db.Text
+  startedAt            DateTime                   @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt          DateTime?                  @map("completed_at") @db.Timestamptz(6)
+
+  // Relations
+  run                  AgentRun                   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task                 AgentTask?                 @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  workspace            Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agent                AgentDefinition            @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  version              AgentConfigurationVersion? @relation(fields: [versionId], references: [id], onDelete: SetNull)
+
+  @@index([runId, startedAt])
+  @@index([taskId])
+  @@index([workspaceId, agentId])
+  @@map("agent_executions")
+}
+
+model AgentCommunication {
+  id            String     @id @default(uuid()) @db.Uuid
+  runId         String     @map("run_id") @db.Uuid
+  taskId        String?    @map("task_id") @db.Uuid
+  workspaceId   String     @map("workspace_id") @db.Uuid
+  fromAgentId   String?    @map("from_agent_id") @db.Uuid
+  toAgentId     String?    @map("to_agent_id") @db.Uuid
+  messageType   String     @map("message_type") @db.VarChar(32)
+  summary       String     @db.Text
+  payloadDigest String     @map("payload_digest") @db.VarChar(64)
+  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  run           AgentRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task          AgentTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  workspace     Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@index([workspaceId])
+  @@map("agent_communications")
+}
+
+model AgentArtifact {
+  id           String     @id @default(uuid()) @db.Uuid
+  runId        String     @map("run_id") @db.Uuid
+  taskId       String?    @map("task_id") @db.Uuid
+  workspaceId  String     @map("workspace_id") @db.Uuid
+  agentId      String?    @map("agent_id") @db.Uuid
+  artifactType String     @map("artifact_type") @db.VarChar(48)
+  title        String     @db.VarChar(160)
+  content      String     @db.Text
+  metadata     Json       @default("{}") @db.JsonB
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  run          AgentRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  task         AgentTask? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@index([workspaceId])
+  @@map("agent_artifacts")
+}
+
+model AgentRunEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  runId       String    @map("run_id") @db.Uuid
+  workspaceId String    @map("workspace_id") @db.Uuid
+  sequence    Int
+  eventType   String    @map("event_type") @db.VarChar(64)
+  taskId      String?   @map("task_id") @db.Uuid
+  agentId     String?   @map("agent_id") @db.Uuid
+  payload     Json      @default("{}") @db.JsonB
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  run         AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sequence])
+  @@index([runId, createdAt])
+  @@index([workspaceId])
+  @@map("agent_run_events")
 }

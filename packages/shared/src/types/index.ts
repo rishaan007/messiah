@@ -301,9 +301,10 @@ export interface RealtimeTicketInfo {
 }
 
 export interface WebSocketClientFrame {
-  action: "auth" | "thread.subscribe" | "thread.unsubscribe" | "ping";
+  action: "auth" | "thread.subscribe" | "thread.unsubscribe" | "swarm.subscribe" | "swarm.unsubscribe" | "ping";
   ticket?: string;
   threadId?: string;
+  runId?: string;
 }
 
 export interface WebSocketServerFrame {
@@ -311,6 +312,7 @@ export interface WebSocketServerFrame {
     | "auth.success"
     | "auth.failed"
     | "thread.snapshot"
+    | "swarm.snapshot"
     | "run.started"
     | "message.delta"
     | "message.snapshot"
@@ -319,6 +321,24 @@ export interface WebSocketServerFrame {
     | "run.failed"
     | "run.cancelled"
     | "run.interrupted"
+    | "swarm.run.started"
+    | "swarm.run.planned"
+    | "swarm.run.awaiting_plan_approval"
+    | "swarm.run.awaiting_approval"
+    | "swarm.run.completed"
+    | "swarm.run.partial_completed"
+    | "swarm.run.failed"
+    | "swarm.run.cancelled"
+    | "swarm.task.queued"
+    | "swarm.agent.started"
+    | "swarm.agent.message"
+    | "swarm.agent.tool_call"
+    | "swarm.agent.tool_result"
+    | "swarm.agent.approval_requested"
+    | "swarm.agent.completed"
+    | "swarm.agent.failed"
+    | "swarm.artifact.created"
+    | "swarm.budget.updated"
     | "pong"
     | "error";
   data?: unknown;
@@ -327,6 +347,7 @@ export interface WebSocketServerFrame {
     message: string;
   };
   threadId?: string;
+  runId?: string;
   timestamp: string;
 }
 
@@ -946,7 +967,310 @@ export interface BridgeDevicePolicy {
   maxCpuPercent: number;
   maxProcesses: number;
   networkAllowed: boolean;
+  networkAllowedHosts?: string[];
+  networkAllowedPorts?: number[];
   allowedAgentAdapters: string[];
+}
+
+// ==============================================================================
+// Multi-Agent Orchestration & Swarm Topology Types (Phase 5)
+// ==============================================================================
+
+export type AgentStatus = "DRAFT" | "ACTIVE" | "ARCHIVED";
+
+export type AgentRunStatus =
+  | "PENDING"
+  | "PLANNING"
+  | "AWAITING_PLAN_APPROVAL"
+  | "RUNNING"
+  | "AWAITING_APPROVAL"
+  | "SYNTHESIZING"
+  | "COMPLETED"
+  | "PARTIAL_COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+
+export type AgentTaskStatus =
+  | "PENDING"
+  | "QUEUED"
+  | "RUNNING"
+  | "AWAITING_APPROVAL"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED"
+  | "SKIPPED"
+  | "UNKNOWN_OUTCOME";
+
+export type AgentExecutionStatus =
+  | "RUNNING"
+  | "AWAITING_APPROVAL"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "CANCELLED"
+  | "UNKNOWN_OUTCOME";
+
+export interface AgentExecutionBudget {
+  maxIterations?: number;
+  maxTokens?: number;
+  maxCostUsd?: number;
+  timeoutMs?: number;
+}
+
+export interface AgentConfigurationVersionInfo {
+  id: string;
+  agentDefinitionId: string;
+  workspaceId: string;
+  versionNumber: number;
+  name: string;
+  roleTitle: string;
+  canSupervise: boolean;
+  providerConnectionId: string | null;
+  modelId: string | null;
+  systemPrompt: string;
+  temperature: number;
+  maxOutputTokens: number;
+  allowedMcpToolIds: string[];
+  allowedBridgeCapabilities: string[];
+  preferredBridgeDeviceId: string | null;
+  executionBudget: AgentExecutionBudget;
+  configHash: string;
+  createdByUserId: string | null;
+  createdAt: string;
+}
+
+export interface AgentDefinitionInfo {
+  id: string;
+  workspaceId: string;
+  createdByUserId: string | null;
+  name: string;
+  slug: string;
+  roleTitle: string;
+  category: string;
+  description: string | null;
+  avatarAccent: string | null;
+  isTemplate: boolean;
+  canSupervise: boolean;
+  status: AgentStatus;
+  activeVersion: number;
+  providerConnectionId: string | null;
+  providerConnectionSummary?: {
+    id: string;
+    provider: SupportedProviderId;
+    displayName: string;
+    status: ProviderConnectionStatus;
+  } | null;
+  modelId: string | null;
+  systemPrompt: string;
+  temperature: number;
+  maxOutputTokens: number;
+  allowedMcpToolIds: string[];
+  allowedBridgeCapabilities: string[];
+  preferredBridgeDeviceId: string | null;
+  defaultExecutionBudget: AgentExecutionBudget;
+  createdAt: string;
+  updatedAt: string;
+  versions?: AgentConfigurationVersionInfo[];
+}
+
+export interface SwarmPlanTaskSpec {
+  taskKey: string;
+  title: string;
+  instructions: string;
+  assignedAgentId: string;
+  dependsOnKeys: string[];
+  inputTaskKeys: string[];
+  priority?: number;
+  maxIterations?: number;
+  targetBridgeDeviceId?: string | null;
+}
+
+export interface SwarmExecutionPlan {
+  goalSummary: string;
+  planHash: string;
+  tasks: SwarmPlanTaskSpec[];
+}
+
+export interface AgentTaskInfo {
+  id: string;
+  runId: string;
+  workspaceId: string;
+  taskKey: string;
+  title: string;
+  instructions: string;
+  assignedAgentId: string;
+  assignedVersionId: string | null;
+  assignedAgent?: {
+    id: string;
+    name: string;
+    roleTitle: string;
+    category: string;
+    avatarAccent: string | null;
+    modelId: string | null;
+  } | null;
+  dependsOnKeys: string[];
+  inputTaskKeys: string[];
+  delegationDepth: number;
+  fingerprint: string;
+  status: AgentTaskStatus;
+  priority: number;
+  maxIterations: number;
+  targetBridgeDeviceId: string | null;
+  outputSummary: string | null;
+  outputData: Record<string, unknown> | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  attemptCount: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentExecutionInfo {
+  id: string;
+  runId: string;
+  taskId: string | null;
+  workspaceId: string;
+  agentId: string;
+  versionId: string | null;
+  phase: string;
+  status: AgentExecutionStatus;
+  providerConnectionId: string | null;
+  modelId: string | null;
+  iterationsUsed: number;
+  toolCallIds: string[];
+  bridgeTaskIds: string[];
+  inputTokens: number;
+  outputTokens: number;
+  durationMs: number | null;
+  resultSummary: string | null;
+  errorMessage: string | null;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export interface AgentCommunicationInfo {
+  id: string;
+  runId: string;
+  taskId: string | null;
+  workspaceId: string;
+  fromAgentId: string | null;
+  toAgentId: string | null;
+  messageType: string;
+  summary: string;
+  payloadDigest: string;
+  createdAt: string;
+}
+
+export interface AgentArtifactInfo {
+  id: string;
+  runId: string;
+  taskId: string | null;
+  workspaceId: string;
+  agentId: string | null;
+  artifactType: string;
+  title: string;
+  content: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AgentRunEventInfo {
+  id: string;
+  runId: string;
+  workspaceId: string;
+  sequence: number;
+  eventType: SwarmStreamEventType | string;
+  taskId: string | null;
+  agentId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AgentRunInfo {
+  id: string;
+  workspaceId: string;
+  createdByUserId: string | null;
+  threadId: string | null;
+  assistantMessageId: string | null;
+  supervisorAgentId: string;
+  supervisorVersionId: string | null;
+  supervisorAgent?: {
+    id: string;
+    name: string;
+    roleTitle: string;
+    category: string;
+    avatarAccent: string | null;
+    modelId: string | null;
+  } | null;
+  workerAgentIds: string[];
+  objective: string;
+  status: AgentRunStatus;
+  requirePlanApproval: boolean;
+  planApprovedAt: string | null;
+  planJson: SwarmExecutionPlan | null;
+  maxTotalTokens: number;
+  maxCostUsd: number;
+  maxDurationMs: number;
+  maxConcurrency: number;
+  maxDelegationDepth: number;
+  maxReplanRounds: number;
+  replanCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedCostUsd: number;
+  finalSummary: string | null;
+  safeErrorCode: string | null;
+  errorMessage: string | null;
+  cancellationRequestedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SwarmRunDetail extends AgentRunInfo {
+  tasks: AgentTaskInfo[];
+  executions: AgentExecutionInfo[];
+  communications: AgentCommunicationInfo[];
+  artifacts: AgentArtifactInfo[];
+  events: AgentRunEventInfo[];
+  pendingToolApprovals?: ToolApprovalInfo[];
+  bridgeTasks?: BridgeTaskInfo[];
+}
+
+export type SwarmStreamEventType =
+  | "swarm.run.started"
+  | "swarm.run.planned"
+  | "swarm.run.awaiting_plan_approval"
+  | "swarm.run.awaiting_approval"
+  | "swarm.run.completed"
+  | "swarm.run.partial_completed"
+  | "swarm.run.failed"
+  | "swarm.run.cancelled"
+  | "swarm.task.queued"
+  | "swarm.agent.started"
+  | "swarm.agent.message"
+  | "swarm.agent.tool_call"
+  | "swarm.agent.tool_result"
+  | "swarm.agent.approval_requested"
+  | "swarm.agent.completed"
+  | "swarm.agent.failed"
+  | "swarm.artifact.created"
+  | "swarm.budget.updated";
+
+export interface SwarmStreamEvent {
+  type: SwarmStreamEventType;
+  runId: string;
+  workspaceId: string;
+  threadId?: string | null;
+  taskId?: string | null;
+  agentId?: string | null;
+  sequence: number;
+  timestamp: string;
+  payload: Record<string, unknown>;
 }
 
 

@@ -43,9 +43,48 @@ export class ReconciliationService {
         },
       });
 
-      if (updatedRuns.count > 0 || updatedMessages.count > 0) {
+      // 3. Reconcile unfinished Swarm AgentRuns & active tasks/executions left running across restart
+      const updatedSwarms = await prisma.agentRun.updateMany({
+        where: {
+          status: { in: ["PENDING", "PLANNING", "RUNNING", "SYNTHESIZING"] },
+          updatedAt: { lte: staleDate },
+        },
+        data: {
+          status: "FAILED",
+          safeErrorCode: "SERVER_RESTARTED_DURING_EXECUTION",
+          errorMessage: "Worker or server restarted while swarm orchestration was in progress.",
+          completedAt: now,
+        },
+      });
+
+      if (updatedSwarms.count > 0) {
+        await prisma.agentTask.updateMany({
+          where: {
+            status: { in: ["QUEUED", "RUNNING"] },
+            updatedAt: { lte: staleDate },
+          },
+          data: {
+            status: "UNKNOWN_OUTCOME",
+            errorCode: "SERVER_RESTARTED_DURING_EXECUTION",
+            completedAt: now,
+          },
+        });
+        await prisma.agentExecution.updateMany({
+          where: {
+            status: "RUNNING",
+            startedAt: { lte: staleDate },
+          },
+          data: {
+            status: "UNKNOWN_OUTCOME",
+            errorMessage: "Server restarted during execution.",
+            completedAt: now,
+          },
+        });
+      }
+
+      if (updatedRuns.count > 0 || updatedMessages.count > 0 || updatedSwarms.count > 0) {
         console.warn(
-          `[ReconciliationService] Reconciled ${updatedRuns.count} orphaned generation runs and ${updatedMessages.count} messages into FAILED state after server restart.`
+          `[ReconciliationService] Reconciled ${updatedRuns.count} orphaned generation runs, ${updatedMessages.count} messages, and ${updatedSwarms.count} swarm runs after restart.`
         );
       }
 

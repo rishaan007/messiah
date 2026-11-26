@@ -9,6 +9,7 @@ import {
   generationService,
   streamPublisher,
 } from "../../../services/chat/index.js";
+import { swarmService, swarmStreamPublisher } from "../../../services/agents/index.js";
 
 export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
   /**
@@ -82,9 +83,16 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
 
       let authenticatedUserId: string | null = null;
       const threadUnsubscribers = new Map<string, () => void>();
+      const swarmUnsubscribers = new Map<string, () => void>();
 
       // Safe send helper
-      const sendFrame = (event: string, data?: unknown, error?: { code: string; message: string }, threadId?: string) => {
+      const sendFrame = (
+        event: string,
+        data?: unknown,
+        error?: { code: string; message: string },
+        threadId?: string,
+        runId?: string
+      ) => {
         if (socket.readyState === socket.OPEN) {
           socket.send(
             JSON.stringify({
@@ -92,6 +100,7 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
               data,
               error,
               threadId,
+              runId,
               timestamp: new Date().toISOString(),
             })
           );
@@ -124,7 +133,7 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
             return;
           }
 
-          const { action, ticket, threadId } = validated.data;
+          const { action, ticket, threadId, runId } = validated.data;
 
           // A. Handle "auth" action
           if (action === "auth") {
@@ -247,6 +256,64 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
             }
             return;
           }
+
+          // E. Handle "swarm.subscribe" action
+          if (action === "swarm.subscribe") {
+            if (!runId) {
+              sendFrame("error", undefined, {
+                code: "MISSING_RUN_ID",
+                message: "runId is required for swarm subscription",
+              });
+              return;
+            }
+
+            const runMeta = await prisma.agentRun.findUnique({
+              where: { id: runId },
+              select: { id: true, workspaceId: true },
+            });
+            if (!runMeta) {
+              sendFrame("error", undefined, { code: "NOT_FOUND", message: "Swarm run not found" }, undefined, runId);
+              return;
+            }
+
+            try {
+              const snapshot = await swarmService.getSwarmRunDetail(
+                runMeta.id,
+                runMeta.workspaceId,
+                authenticatedUserId
+              );
+
+              if (swarmUnsubscribers.has(runId)) {
+                swarmUnsubscribers.get(runId)!();
+                swarmUnsubscribers.delete(runId);
+              }
+
+              const unsubscribeSwarm = swarmStreamPublisher.onSwarmEvent(runId, (event) => {
+                sendFrame(event.type, event, undefined, event.threadId || undefined, runId);
+              });
+              swarmUnsubscribers.set(runId, unsubscribeSwarm);
+
+              sendFrame("swarm.snapshot", snapshot, undefined, snapshot.threadId || undefined, runId);
+            } catch {
+              sendFrame(
+                "error",
+                undefined,
+                { code: "FORBIDDEN", message: "Unauthorized swarm run subscription" },
+                undefined,
+                runId
+              );
+            }
+            return;
+          }
+
+          // F. Handle "swarm.unsubscribe" action
+          if (action === "swarm.unsubscribe") {
+            if (runId && swarmUnsubscribers.has(runId)) {
+              swarmUnsubscribers.get(runId)!();
+              swarmUnsubscribers.delete(runId);
+            }
+            return;
+          }
         } catch (err: unknown) {
           sendFrame("error", undefined, {
             code: "INTERNAL_ERROR",
@@ -262,6 +329,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
           unsub();
         }
         threadUnsubscribers.clear();
+        for (const unsub of swarmUnsubscribers.values()) {
+          unsub();
+        }
+        swarmUnsubscribers.clear();
       });
 
       socket.on("error", (err) => {

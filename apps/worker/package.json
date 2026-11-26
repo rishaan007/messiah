@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@messiah/agents": "workspace:*",
     "@messiah/db": "workspace:*",
     "@messiah/mcp": "workspace:*",
     "@messiah/providers": "workspace:*",

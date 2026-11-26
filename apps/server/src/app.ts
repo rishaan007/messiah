@@ -20,7 +20,10 @@ import { realtimeRoutes } from "./routes/api/v1/realtime.js";
 import { mcpRoutes } from "./routes/api/v1/mcp.js";
 import { toolApprovalRoutes } from "./routes/api/v1/toolApprovals.js";
 import { deviceRoutes } from "./routes/api/v1/devices.js";
+import { agentRoutes } from "./routes/api/v1/agents.js";
+import { swarmRoutes } from "./routes/api/v1/swarms.js";
 import { streamPublisher, ticketService, cancellationService, chatQueueManager, chatWorkerManager, ReconciliationService } from "./services/chat/index.js";
+import { swarmStreamPublisher } from "./services/agents/index.js";
 import { devicePresenceService } from "./services/devices/index.js";
 import { createLogger } from "./utils/logger.js";
 
@@ -68,6 +71,7 @@ export async function buildApp(opts: BuildAppOptions) {
 
   // Wire services with Redis
   streamPublisher.setRedis(app.redis);
+  swarmStreamPublisher.setRedis(app.redis);
   ticketService.setRedis(app.redis);
   cancellationService.setRedis(app.redis);
   devicePresenceService.setRedis(app.redis);
@@ -151,6 +155,8 @@ export async function buildApp(opts: BuildAppOptions) {
   await app.register(mcpRoutes);
   await app.register(toolApprovalRoutes, { prefix: "/api/v1" });
   await app.register(deviceRoutes, { prefix: "/api/v1" });
+  await app.register(agentRoutes, { prefix: "/api/v1" });
+  await app.register(swarmRoutes, { prefix: "/api/v1" });
 
   return app;
 }

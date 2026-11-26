@@ -1204,4 +1204,19 @@ CREATE TABLE "bridge_task_logs" (
 
 ---
 
+## 12. Multi-Agent Orchestration & Swarm Persistence (Phase 5)
+
+Migration `8_multi_agent_orchestration` extends `mcp_tool_calls` and `bridge_tasks` with optional `agent_run_id` / `agent_task_id` foreign keys and adds eight dedicated tables governed by workspace tenancy:
+
+- `agent_definitions` (`AgentStatus`: `DRAFT`, `ACTIVE`, `ARCHIVED`): Persona definitions, system prompts, provider/model bindings, MCP tool allowlists, Bridge capability allowlists, and supervisor permissions.
+- `agent_configuration_versions`: Immutable SHA-256 hashed configuration snapshots captured on creation, update, and run execution.
+- `agent_runs` (`AgentRunStatus`: `PENDING`, `PLANNING`, `AWAITING_PLAN_APPROVAL`, `RUNNING`, `AWAITING_APPROVAL`, `SYNTHESIZING`, `COMPLETED`, `PARTIAL_COMPLETED`, `FAILED`, `CANCELLED`): Top-level Swarm orchestration runs, validated DAG JSON plans, budget limits (`max_total_tokens`, `max_cost_usd`, `max_duration_ms`, `max_concurrency`), and synthesized output summaries.
+- `agent_tasks` (`AgentTaskStatus`: `PENDING`, `QUEUED`, `RUNNING`, `AWAITING_APPROVAL`, `COMPLETED`, `FAILED`, `CANCELLED`, `SKIPPED`, `UNKNOWN_OUTCOME`): Individual DAG task nodes with dependency keys, scoped input references, deterministic task fingerprints (`fingerprint`), and token accounting.
+- `agent_executions` (`AgentExecutionStatus`): Per-attempt planning, worker execution, and synthesis trace logs linked to `ToolCall` and `BridgeTask` IDs.
+- `agent_communications`: Scoped, secret-redacted inter-agent delegation and outcome handoff digests.
+- `agent_artifacts`: Structured report, patch, diagnostic, and JSON deliverables attached to tasks or completed swarms.
+- `agent_run_events`: Monotonically sequenced `(run_id, sequence)` event ledger powering real-time WebSocket replay and reconnection state reconciliation.
+
+---
+
 _End of Document: Messiah Database Schema & Persistence Specification._

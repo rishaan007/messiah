@@ -264,6 +264,8 @@ export class CapabilityRegistry {
             timeoutMs,
             maxMemoryBytes: policy.maxMemoryBytes,
             networkAllowed: Boolean(policy.networkAllowed),
+            networkAllowedHosts: policy.networkAllowedHosts,
+            networkAllowedPorts: policy.networkAllowedPorts,
           },
           (stream, chunk) => ctx.onLog?.(stream, chunk)
         );

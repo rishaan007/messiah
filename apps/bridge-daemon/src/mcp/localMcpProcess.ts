@@ -87,9 +87,11 @@ export class LocalMcpProcess {
       }
     }
 
+    const targetBinary = this.config.pinnedExecutablePath || resolvedExe;
+    const preSpawnMeta = LocalMcpRegistry.verifyAndHashExecutable(targetBinary);
+
     if (this.config.pinnedExecutableSha256) {
-      const currentHash = LocalMcpRegistry.computeFileSha256(this.config.pinnedExecutablePath || resolvedExe);
-      if (!currentHash || currentHash !== this.config.pinnedExecutableSha256) {
+      if (!preSpawnMeta || preSpawnMeta.sha256 !== this.config.pinnedExecutableSha256) {
         throw new McpSecurityError(
           "MCP_EXECUTABLE_HASH_MISMATCH",
           `Executable binary SHA-256 changed for '${this.config.serverName}'. Renewed approval required.`
@@ -126,7 +128,21 @@ export class LocalMcpProcess {
       env: this.config.env,
       explicitAllowedEnvKeys: this.config.allowedEnvKeys,
       networkAllowed: Boolean(this.config.networkPolicy),
+      networkAllowedHosts: this.config.networkAllowedHosts,
+      networkAllowedPorts: this.config.networkAllowedPorts,
     });
+
+    // Post-spawn integrity double-check on pinned executable against TOCTOU race
+    if (this.config.pinnedExecutableSha256) {
+      const postSpawnMeta = LocalMcpRegistry.verifyAndHashExecutable(this.config.pinnedExecutablePath || resolvedExe);
+      if (!postSpawnMeta || postSpawnMeta.sha256 !== this.config.pinnedExecutableSha256) {
+        await spawned.cleanup();
+        throw new McpSecurityError(
+          "MCP_EXECUTABLE_HASH_MISMATCH",
+          `Executable binary changed during spawn window (TOCTOU detected) for '${this.config.serverName}'.`
+        );
+      }
+    }
 
     this.child = spawned.child;
     this.sandboxCleanup = spawned.cleanup;

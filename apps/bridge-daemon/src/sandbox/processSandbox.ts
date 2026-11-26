@@ -5,6 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import {
   SandboxUnavailableError,
+  SandboxPolicyViolationError,
   type ISandboxProvider,
   type SandboxCapabilities,
   type SandboxExecutionOptions,
@@ -12,6 +13,7 @@ import {
 } from "./sandboxInterface.js";
 import { SandboxDetector } from "./sandboxDetector.js";
 import { EnvAllowlist } from "./envAllowlist.js";
+import { EgressAllowlistProxy } from "./egressAllowlistProxy.js";
 import { PathGuard } from "../filesystem/pathGuard.js";
 import { LogRedactor } from "../security/logRedactor.js";
 
@@ -117,15 +119,55 @@ export class ProcessSandbox implements ISandboxProvider {
     fs.mkdirSync(isolatedHome, { mode: 0o700 });
     fs.mkdirSync(isolatedTmp, { mode: 0o700 });
 
+    // 3.5 Scoped Network Policy Validation (Fail-Closed: blanket networkAllowed=true is forbidden)
+    const allowedHosts = (options.networkAllowedHosts || []).map((h) => h.trim()).filter(Boolean);
+    const allowedPorts = (options.networkAllowedPorts || []).filter(
+      (p) => Number.isInteger(p) && p >= 1 && p <= 65535
+    );
+    if (options.networkAllowed && allowedHosts.length === 0 && allowedPorts.length === 0) {
+      await fs.promises.rm(sandboxRoot, { recursive: true, force: true }).catch(() => {});
+      throw new SandboxPolicyViolationError(
+        "Blanket unrestricted networkAllowed=true is prohibited; specify networkAllowedHosts and/or networkAllowedPorts."
+      );
+    }
+
+    let egressProxy: EgressAllowlistProxy | null = null;
+    let proxyPort: number | null = null;
+    const proxyEnv: Record<string, string> = {};
+    const proxyEnvKeys: string[] = [];
+
+    if (options.networkAllowed && allowedHosts.length > 0 && !allowedHosts.includes("*")) {
+      if (status.providerName === "linux-bubblewrap" && process.env.MESSIAH_LINUX_ALLOW_PROXY_ONLY_NET !== "true") {
+        await fs.promises.rm(sandboxRoot, { recursive: true, force: true }).catch(() => {});
+        throw new SandboxPolicyViolationError(
+          "Host-scoped network egress on Linux requires kernel netfilter/netns isolation; failing closed."
+        );
+      }
+      egressProxy = new EgressAllowlistProxy(allowedHosts, allowedPorts);
+      proxyPort = await egressProxy.start();
+      const proxyUrl = `http://127.0.0.1:${proxyPort}`;
+      proxyEnv.HTTP_PROXY = proxyUrl;
+      proxyEnv.HTTPS_PROXY = proxyUrl;
+      proxyEnv.http_proxy = proxyUrl;
+      proxyEnv.https_proxy = proxyUrl;
+      proxyEnv.NO_PROXY = "";
+      proxyEnvKeys.push("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NO_PROXY");
+    }
+
     // 4. Construct strict allowlist environment (never copy host secrets)
     const sanitizedEnv = EnvAllowlist.build({
       isolatedHome,
       isolatedTmp,
-      customEnv: options.env,
-      explicitAllowedKeys: options.explicitAllowedEnvKeys,
+      customEnv: { ...(options.env || {}), ...proxyEnv },
+      explicitAllowedKeys: [...(options.explicitAllowedEnvKeys || []), ...proxyEnvKeys],
     });
 
     const cleanup = async () => {
+      try {
+        if (egressProxy) {
+          await egressProxy.stop();
+        }
+      } catch {}
       try {
         await fs.promises.rm(sandboxRoot, { recursive: true, force: true });
       } catch {}
@@ -140,7 +182,16 @@ export class ProcessSandbox implements ISandboxProvider {
         .map((p) => `  (subpath "${escapeSeatbeltLiteral(p)}")`)
         .join("\n");
 
-      const networkRule = options.networkAllowed ? "(allow network-outbound)" : "";
+      let networkRule = "";
+      if (options.networkAllowed) {
+        if (proxyPort !== null) {
+          // Strict kernel confinement: ONLY loopback connections to the in-process allowlist proxy
+          networkRule = `(allow network-outbound (remote tcp "localhost:${proxyPort}"))`;
+        } else if (allowedPorts.length > 0) {
+          const portFilters = allowedPorts.map((port) => `(remote tcp "*:${port}")`).join("\n  ");
+          networkRule = `(allow network-outbound\n  ${portFilters})`;
+        }
+      }
       const profileContent = `(version 1)
 (deny default)
 (import "system.sb")
@@ -257,6 +308,8 @@ ${rwSubpaths})
           readOnlyMounts: canonicalReadOnly,
           writableMounts: [isolatedHome, isolatedTmp, ...canonicalWritable],
           networkAllowed: Boolean(options.networkAllowed),
+          networkAllowedHosts: allowedHosts,
+          networkAllowedPorts: allowedPorts,
           env: sanitizedEnv,
         }),
         { mode: 0o600 }

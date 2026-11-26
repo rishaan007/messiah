@@ -612,4 +612,242 @@ describe("MESSIAH Phase 4B — Security Acceptance & OS-Enforced Isolation Suite
       delete process.env.MESSIAH_VAULT_PASSPHRASE;
     });
   });
+
+  describe("7. ReplayGuard Fail-Closed Corruption, Scoped Network Allowlist & Adversarial Swap Tests", () => {
+    it("fails closed when replay_guard.json is corrupted, truncated, or tampered", async () => {
+      const { ReplayGuard, ReplayGuardCorruptedError } = await import("../security/replayGuard.js");
+      const guardPath = path.join(configDir, "replay_guard.json");
+
+      // Valid initial state
+      const g1 = new ReplayGuard(configDir);
+      expect(g1.checkAndRecordNonce("nonce-initial-1", Date.now() + 60_000)).toBe(true);
+      expect(fs.existsSync(guardPath)).toBe(true);
+
+      // A. Malformed JSON must fail closed (never silently reset to empty)
+      fs.writeFileSync(guardPath, "{corrupted-json", { mode: 0o600 });
+      const corruptedGuard = new ReplayGuard(configDir);
+      expect(corruptedGuard.isCorrupted()).toBe(true);
+      expect(() => corruptedGuard.checkAndRecordNonce("nonce-2", Date.now() + 60_000)).toThrow(
+        ReplayGuardCorruptedError
+      );
+
+      // TaskExecutor must also fail closed with REPLAY_STORE_CORRUPTED
+      const corruptedExec = new TaskExecutor(configDir);
+      corruptedExec.getPolicyService().addProjectRoot(approvedRwRoot, true);
+      const secret = "messiah_device_secret_alpha_min_32_bytes_key";
+      const deviceId = crypto.randomUUID();
+      const workspaceId = crypto.randomUUID();
+      const taskId = crypto.randomUUID();
+      const requestId = crypto.randomUUID();
+      const params = { rootPath: approvedRwRoot, relativePath: "sample.txt" };
+      const argumentsHash = crypto.createHash("sha256").update(JSON.stringify(params)).digest("hex");
+      const issuedAt = Date.now();
+      const expiresAt = issuedAt + 60_000;
+      const nonce = crypto.randomBytes(16).toString("hex");
+      const canonical = TaskSignatureVerifier.formatCanonicalPayloadV2({
+        taskId,
+        requestId,
+        deviceId,
+        workspaceId,
+        capability: "filesystem.read",
+        resourceScopes: [approvedRwRoot],
+        argumentsHash,
+        issuedAt,
+        expiresAt,
+        nonce,
+        policyVersion: "2026-08-01",
+      });
+      const sig = crypto.createHmac("sha256", secret).update(canonical).digest("base64");
+
+      let failedCode = "";
+      await corruptedExec.executeTask(
+        {
+          type: "device.task.dispatch",
+          taskId,
+          requestId,
+          deviceId,
+          workspaceId,
+          capability: "filesystem.read",
+          resourceScopes: [approvedRwRoot],
+          parameters: params,
+          argumentsHash,
+          issuedAt,
+          expiresAt,
+          nonce,
+          policyVersion: "2026-08-01",
+          serverSignature: sig,
+        },
+        { hmacSecret: secret, expectedDeviceId: deviceId },
+        {
+          onAccepted: () => {},
+          onStarted: () => {},
+          onProgress: () => {},
+          onLog: () => {},
+          onCompleted: () => {},
+          onFailed: (_id, c) => { failedCode = c; },
+        }
+      );
+      expect(failedCode).toBe("REPLAY_STORE_CORRUPTED");
+
+      // B. Tampered checksum fails closed
+      const validDir = path.join(baseTmp, "tamper-replay");
+      fs.mkdirSync(validDir, { recursive: true });
+      const gValid = new ReplayGuard(validDir);
+      expect(gValid.checkAndRecordNonce("n1", Date.now() + 60_000)).toBe(true);
+      const rawJson = JSON.parse(fs.readFileSync(path.join(validDir, "replay_guard.json"), "utf-8"));
+      rawJson.nonces = {}; // attacker attempts to wipe nonces without updating checksum
+      fs.writeFileSync(path.join(validDir, "replay_guard.json"), JSON.stringify(rawJson));
+      const gTampered = new ReplayGuard(validDir);
+      expect(gTampered.isCorrupted()).toBe(true);
+    });
+
+    it("rejects blanket networkAllowed=true without scoped hosts/ports and enforces scoped allowlist inside OS sandbox", async () => {
+      const detector = await SandboxDetector.detect();
+      if (!detector.available) return;
+
+      const { SandboxPolicyViolationError } = await import("../sandbox/sandboxInterface.js");
+      const sandbox = new ProcessSandbox();
+
+      // Blanket unrestricted networkAllowed=true must FAIL CLOSED
+      await expect(
+        sandbox.execute({
+          taskId: "blanket-net-fail",
+          executable: process.execPath,
+          args: ["-e", "console.log('should not run')"],
+          cwd: approvedRoRoot,
+          allowedMounts: [approvedRoRoot],
+          networkAllowed: true,
+        })
+      ).rejects.toThrow(SandboxPolicyViolationError);
+
+      // Scoped network proxy allows allowlisted port and blocks direct bypass & disallowed ports on macOS Seatbelt
+      if (os.platform() === "darwin") {
+        const http = await import("node:http");
+        const targetServer = http.createServer((_req, res) => {
+          res.writeHead(200, { "Content-Type": "text/plain" });
+          res.end("ALLOWED_TARGET_OK");
+        });
+        await new Promise<void>((resolve) => targetServer.listen(0, "127.0.0.1", resolve));
+        const addr = targetServer.address() as { port: number };
+
+        try {
+          // Child attempts direct socket to another port (port 81) -> Seatbelt blocks it!
+          // Child attempts HTTP request via configured HTTP_PROXY to disallowed host example.com -> proxy returns 403!
+          const res = await sandbox.execute({
+            taskId: "scoped-net-test",
+            executable: process.execPath,
+            args: [
+              "-e",
+              `
+              const http = require("node:http");
+              const net = require("node:net");
+              async function main() {
+                const proxyUrl = new URL(process.env.HTTP_PROXY);
+                // 0. Allowlisted host+port via proxy -> 200 ALLOWED_TARGET_OK
+                const allowedBody = await new Promise((resolve) => {
+                  const req = http.request({
+                    host: proxyUrl.hostname,
+                    port: Number(proxyUrl.port),
+                    path: "http://127.0.0.1:${addr.port}/",
+                    method: "GET",
+                    agent: false,
+                    headers: { Connection: "close" },
+                  }, (r) => {
+                    let body = "";
+                    r.on("data", (d) => (body += d));
+                    r.on("end", () => resolve({ status: r.statusCode, body }));
+                  });
+                  req.on("error", () => resolve({ status: -1, body: "" }));
+                  req.end();
+                });
+                // 1. Disallowed host via proxy -> 403
+                const blockedStatus = await new Promise((resolve) => {
+                  const req = http.request({
+                    host: proxyUrl.hostname,
+                    port: Number(proxyUrl.port),
+                    path: "http://example.com:${addr.port}/",
+                    method: "GET",
+                    agent: false,
+                    headers: { Connection: "close" },
+                  }, (r) => resolve(r.statusCode));
+                  req.on("error", () => resolve(-1));
+                  req.end();
+                });
+                // 2. Direct socket bypass to port 9999 -> kernel EPERM/EACCES
+                const directBlocked = await new Promise((resolve) => {
+                  const s = net.connect(9999, "127.0.0.1", () => resolve("connected"));
+                  s.on("error", (e) => resolve(e.code || "err"));
+                });
+                console.log(JSON.stringify({ allowedBody, blockedStatus, directBlocked, proxySet: Boolean(process.env.HTTP_PROXY) }));
+              }
+              main();
+              `,
+            ],
+            cwd: approvedRoRoot,
+            allowedMounts: [approvedRoRoot],
+            networkAllowed: true,
+            networkAllowedHosts: ["127.0.0.1"],
+            networkAllowedPorts: [addr.port],
+          });
+
+          expect(res.exitCode).toBe(0);
+          const parsed = JSON.parse(res.stdout.trim());
+          expect(parsed.proxySet).toBe(true);
+          expect(parsed.allowedBody.status).toBe(200);
+          expect(parsed.allowedBody.body).toBe("ALLOWED_TARGET_OK");
+          expect(parsed.blockedStatus).toBe(403);
+          expect(parsed.directBlocked).not.toBe("connected");
+        } finally {
+          await new Promise<void>((r) => {
+            targetServer.close(() => r());
+            targetServer.closeAllConnections?.();
+          });
+        }
+      }
+    });
+
+    it("detects adversarial parent directory symlink swap and MCP executable binary TOCTOU tampering", async () => {
+      const detector = await SandboxDetector.detect();
+      if (!detector.available) return;
+
+      // 1. Parent directory symlink escape
+      const subDir = path.join(approvedRwRoot, "nested");
+      fs.mkdirSync(subDir, { recursive: true });
+      fs.writeFileSync(path.join(subDir, "item.txt"), "safe");
+
+      const evilOutsideDir = path.join(outsideSecretDir, "evil-dir");
+      fs.mkdirSync(evilOutsideDir, { recursive: true });
+      fs.writeFileSync(path.join(evilOutsideDir, "item.txt"), "pwned");
+
+      // Swap nested dir with symlink to outside directory
+      fs.rmSync(subDir, { recursive: true, force: true });
+      fs.symlinkSync(evilOutsideDir, subDir);
+
+      await expect(
+        SafeFileOperations.modifyFile([approvedRwRoot], approvedRwRoot, "nested/item.txt", "overwrite")
+      ).rejects.toThrowError(/symbolic link|escape|SYMLINK/i);
+
+      // 2. MCP binary tampering detection via pinnedExecutableSha256
+      const serverScript = path.join(approvedRwRoot, "pinned-server.js");
+      fs.writeFileSync(serverScript, '#!/usr/bin/env node\nsetTimeout(() => {}, 1000);\n');
+      fs.chmodSync(serverScript, 0o755);
+
+      const initialHash = LocalMcpRegistry.computeFileSha256(serverScript)!;
+      const proc = new LocalMcpProcess(
+        {
+          serverName: "toctou-test",
+          command: serverScript,
+          args: [],
+          cwd: approvedRwRoot,
+          pinnedExecutablePath: serverScript,
+          pinnedExecutableSha256: initialHash,
+        },
+        [approvedRwRoot]
+      );
+
+      // Attacker modifies binary before launch
+      fs.writeFileSync(serverScript, '#!/usr/bin/env node\nconsole.log("pwned");\n');
+      await expect(proc.start()).rejects.toThrowError(/MCP_EXECUTABLE_HASH_MISMATCH|SHA-256 changed/i);
+    });
+  });
 });

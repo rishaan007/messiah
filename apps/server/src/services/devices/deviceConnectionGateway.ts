@@ -16,6 +16,7 @@ import {
 } from "@messiah/shared";
 import { devicePresenceService } from "./devicePresenceService.js";
 import { taskAuthorizationService } from "./taskAuthorizationService.js";
+import { chatQueueManager } from "../chat/chatQueue.js";
 import { LogRedactor } from "@messiah/bridge-daemon";
 
 interface PendingChallenge {
@@ -505,57 +506,77 @@ export class DeviceConnectionGateway {
 
           case "device.task.completed": {
             resetHeartbeatWatchdog();
-            await prisma.bridgeTask.update({
-              where: { id: frame.taskId },
-              data: {
-                status: "SUCCEEDED",
-                result: frame.result as any,
-                exitCode: frame.exitCode ?? 0,
-                durationMs: frame.durationMs,
-                completedAt: new Date(frame.timestamp),
-              },
-            }).catch(() => {});
+            const completedTask = await prisma.bridgeTask
+              .update({
+                where: { id: frame.taskId },
+                data: {
+                  status: "SUCCEEDED",
+                  result: frame.result as any,
+                  exitCode: frame.exitCode ?? 0,
+                  durationMs: frame.durationMs,
+                  completedAt: new Date(frame.timestamp),
+                },
+              })
+              .catch(() => null);
+            if (completedTask?.agentRunId) {
+              await this.resumeSwarmRunForBridgeTask(completedTask.agentRunId, completedTask.workspaceId, completedTask.userId);
+            }
             break;
           }
 
           case "device.task.failed": {
             resetHeartbeatWatchdog();
-            await prisma.bridgeTask.update({
-              where: { id: frame.taskId },
-              data: {
-                status: "FAILED",
-                errorMessage: frame.message,
-                exitCode: frame.exitCode ?? 1,
-                durationMs: frame.durationMs,
-                completedAt: new Date(frame.timestamp),
-              },
-            }).catch(() => {});
+            const failedTask = await prisma.bridgeTask
+              .update({
+                where: { id: frame.taskId },
+                data: {
+                  status: "FAILED",
+                  errorMessage: frame.message,
+                  exitCode: frame.exitCode ?? 1,
+                  durationMs: frame.durationMs,
+                  completedAt: new Date(frame.timestamp),
+                },
+              })
+              .catch(() => null);
+            if (failedTask?.agentRunId) {
+              await this.resumeSwarmRunForBridgeTask(failedTask.agentRunId, failedTask.workspaceId, failedTask.userId);
+            }
             break;
           }
 
           case "device.task.unknown_outcome": {
             resetHeartbeatWatchdog();
-            await prisma.bridgeTask.update({
-              where: { id: frame.taskId },
-              data: {
-                status: "UNKNOWN_OUTCOME",
-                errorMessage: frame.reason,
-                completedAt: new Date(frame.timestamp),
-              },
-            }).catch(() => {});
+            const unknownTask = await prisma.bridgeTask
+              .update({
+                where: { id: frame.taskId },
+                data: {
+                  status: "UNKNOWN_OUTCOME",
+                  errorMessage: frame.reason,
+                  completedAt: new Date(frame.timestamp),
+                },
+              })
+              .catch(() => null);
+            if (unknownTask?.agentRunId) {
+              await this.resumeSwarmRunForBridgeTask(unknownTask.agentRunId, unknownTask.workspaceId, unknownTask.userId);
+            }
             break;
           }
 
           case "device.task.cancelled": {
             resetHeartbeatWatchdog();
-            await prisma.bridgeTask.update({
-              where: { id: frame.taskId },
-              data: {
-                status: "CANCELLED",
-                errorMessage: frame.reason,
-                completedAt: new Date(frame.timestamp),
-              },
-            }).catch(() => {});
+            const cancelledTask = await prisma.bridgeTask
+              .update({
+                where: { id: frame.taskId },
+                data: {
+                  status: "CANCELLED",
+                  errorMessage: frame.reason,
+                  completedAt: new Date(frame.timestamp),
+                },
+              })
+              .catch(() => null);
+            if (cancelledTask?.agentRunId) {
+              await this.resumeSwarmRunForBridgeTask(cancelledTask.agentRunId, cancelledTask.workspaceId, cancelledTask.userId);
+            }
             break;
           }
 
@@ -695,6 +716,45 @@ export class DeviceConnectionGateway {
       } catch {}
       active.cleanup();
     }
+  }
+
+  private async resumeSwarmRunForBridgeTask(
+    agentRunId: string,
+    workspaceId: string,
+    userId: string
+  ): Promise<void> {
+    try {
+      const outbox = await prisma.outboxEvent.create({
+        data: {
+          eventType: "swarm.resume",
+          aggregateType: "AgentRun",
+          aggregateId: agentRunId,
+          payload: {
+            kind: "swarm.execute",
+            runId: agentRunId,
+            workspaceId,
+            userId,
+          },
+          status: "PENDING",
+        },
+      });
+      await prisma.agentRun.updateMany({
+        where: { id: agentRunId, status: "AWAITING_APPROVAL" },
+        data: { status: "PENDING" },
+      });
+      await chatQueueManager
+        .enqueueSwarmRun(
+          {
+            kind: "swarm.execute",
+            runId: agentRunId,
+            workspaceId,
+            userId,
+            outboxEventId: outbox.id,
+          },
+          `swarm-${agentRunId}-bridge-${outbox.id}`
+        )
+        .catch(() => {});
+    } catch {}
   }
 }
 

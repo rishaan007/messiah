@@ -28,6 +28,8 @@ export class LocalDevicePolicyService {
       maxCpuPercent: 80,
       maxProcesses: 5,
       networkAllowed: false,
+      networkAllowedHosts: [],
+      networkAllowedPorts: [],
       allowedAgentAdapters: [],
     };
   }

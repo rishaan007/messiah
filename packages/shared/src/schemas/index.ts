@@ -158,9 +158,10 @@ export const RealtimeTicketRequestSchema = z.object({
 export type RealtimeTicketRequestInput = z.infer<typeof RealtimeTicketRequestSchema>;
 
 export const WebSocketClientFrameSchema = z.object({
-  action: z.enum(["auth", "thread.subscribe", "thread.unsubscribe", "ping"]),
+  action: z.enum(["auth", "thread.subscribe", "thread.unsubscribe", "swarm.subscribe", "swarm.unsubscribe", "ping"]),
   ticket: z.string().trim().min(16).max(256).optional(),
   threadId: z.string().uuid().optional(),
+  runId: z.string().uuid().optional(),
 });
 export type WebSocketClientFrameInput = z.infer<typeof WebSocketClientFrameSchema>;
 
@@ -551,6 +552,8 @@ export const ConfigureDevicePolicySchema = z.object({
       maxCpuPercent: z.number().min(1).max(100).default(80),
       maxProcesses: z.number().int().positive().default(5),
       networkAllowed: z.boolean().default(false),
+      networkAllowedHosts: z.array(z.string().min(1).max(255)).default([]),
+      networkAllowedPorts: z.array(z.number().int().min(1).max(65535)).default([]),
       allowedAgentAdapters: z.array(z.string()).default([]),
     })
     .optional(),
@@ -568,6 +571,106 @@ export const RegisterLocalMcpServerSchema = z.object({
   packageName: z.string().optional(),
   packageVersion: z.string().optional(),
   userConfirmed: z.boolean().default(true),
+});
+
+// ==============================================================================
+// Phase 5: Multi-Agent Orchestration & Swarm Schemas
+// ==============================================================================
+
+export const AgentStatusSchema = z.enum(["DRAFT", "ACTIVE", "ARCHIVED"]);
+
+export const AgentExecutionBudgetSchema = z.object({
+  maxIterations: z.number().int().min(1).max(12).optional(),
+  maxTokens: z.number().int().min(512).max(200000).optional(),
+  maxCostUsd: z.number().min(0.01).max(50).optional(),
+  timeoutMs: z.number().int().min(5000).max(600000).optional(),
+});
+
+export const CreateAgentSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  name: z.string().trim().min(2).max(128),
+  slug: z
+    .string()
+    .trim()
+    .min(2)
+    .max(128)
+    .regex(/^[a-z0-9-]+$/, "Slug must contain lowercase letters, numbers, and hyphens")
+    .optional(),
+  roleTitle: z.string().trim().min(2).max(128),
+  category: z.string().trim().min(2).max(64).default("custom"),
+  description: z.string().trim().max(1000).optional().nullable(),
+  avatarAccent: z
+    .string()
+    .trim()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional()
+    .nullable(),
+  canSupervise: z.boolean().default(false),
+  status: AgentStatusSchema.default("ACTIVE"),
+  providerConnectionId: z.string().uuid().optional().nullable(),
+  modelId: z.string().trim().min(1).max(128).optional().nullable(),
+  systemPrompt: z.string().trim().min(5).max(32000),
+  temperature: z.number().min(0).max(2).default(0.3),
+  maxOutputTokens: z.number().int().min(64).max(32768).default(4096),
+  allowedMcpToolIds: z.array(z.string().uuid()).default([]),
+  allowedBridgeCapabilities: z.array(z.string().min(1).max(64)).default([]),
+  preferredBridgeDeviceId: z.string().uuid().optional().nullable(),
+  defaultExecutionBudget: AgentExecutionBudgetSchema.default({}),
+});
+export type CreateAgentDto = z.infer<typeof CreateAgentSchema>;
+
+export const UpdateAgentSchema = CreateAgentSchema.omit({ workspaceId: true }).partial();
+export type UpdateAgentDto = z.infer<typeof UpdateAgentSchema>;
+
+export const TestAgentSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  prompt: z.string().trim().min(1).max(8000),
+});
+export type TestAgentDto = z.infer<typeof TestAgentSchema>;
+
+export const SwarmPlanTaskSpecSchema = z.object({
+  taskKey: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z0-9_-]+$/, "taskKey must be alphanumeric with _ or -"),
+  title: z.string().trim().min(2).max(160),
+  instructions: z.string().trim().min(3).max(8000),
+  assignedAgentId: z.string().uuid(),
+  dependsOnKeys: z.array(z.string()).default([]),
+  inputTaskKeys: z.array(z.string()).default([]),
+  priority: z.number().int().min(0).max(100).optional(),
+  maxIterations: z.number().int().min(1).max(8).optional(),
+  targetBridgeDeviceId: z.string().uuid().optional().nullable(),
+});
+
+export const SwarmPlanPayloadSchema = z.object({
+  goalSummary: z.string().trim().min(3).max(2000),
+  tasks: z.array(SwarmPlanTaskSpecSchema).min(1).max(24),
+});
+
+export const StartSwarmRunSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  supervisorAgentId: z.string().uuid("Invalid supervisor agent ID"),
+  workerAgentIds: z.array(z.string().uuid()).min(1, "Select at least one worker agent").max(8),
+  objective: z.string().trim().min(3).max(16000),
+  threadId: z.string().uuid().optional().nullable(),
+  requirePlanApproval: z.boolean().default(false),
+  maxTotalTokens: z.number().int().min(2000).max(500000).default(120000),
+  maxCostUsd: z.number().min(0.05).max(100).default(2.0),
+  maxDurationMs: z.number().int().min(10000).max(900000).default(300000),
+  maxConcurrency: z.number().int().min(1).max(5).default(3),
+  maxDelegationDepth: z.number().int().min(1).max(4).default(2),
+  maxReplanRounds: z.number().int().min(0).max(3).default(1),
+  targetBridgeDeviceId: z.string().uuid().optional().nullable(),
+});
+export type StartSwarmRunDto = z.infer<typeof StartSwarmRunSchema>;
+
+export const ApproveSwarmPlanSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  action: z.enum(["approve", "reject"]).default("approve"),
+  rejectionReason: z.string().trim().max(500).optional(),
 });
 
 

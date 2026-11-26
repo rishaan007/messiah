@@ -7,6 +7,15 @@ export class SandboxUnavailableError extends Error {
   }
 }
 
+export class SandboxPolicyViolationError extends Error {
+  public readonly code = "SANDBOX_POLICY_VIOLATION";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxPolicyViolationError";
+  }
+}
+
 export interface SandboxCapabilities {
   hasFilesystemIsolation: boolean;
   hasNetworkIsolation: boolean;
@@ -30,6 +39,8 @@ export interface SandboxExecutionOptions {
   maxMemoryBytes?: number;
   maxCpuSeconds?: number;
   networkAllowed?: boolean;
+  networkAllowedHosts?: string[];
+  networkAllowedPorts?: number[];
 }
 
 export interface SandboxExecutionResult {

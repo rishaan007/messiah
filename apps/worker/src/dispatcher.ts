@@ -39,7 +39,7 @@ export class OutboxDispatcher {
       const pendingEvents = await prisma.outboxEvent.findMany({
         where: {
           status: "PENDING",
-          eventType: "generation.dispatch",
+          eventType: { in: ["generation.dispatch", "generation.resume", "swarm.dispatch", "swarm.resume"] },
         },
         orderBy: { createdAt: "asc" },
         take: 50,
@@ -50,9 +50,35 @@ export class OutboxDispatcher {
         const payload = event.payload as Record<string, unknown>;
         const runId = String(payload.runId || event.aggregateId);
 
+        if (event.eventType === "swarm.dispatch" || event.eventType === "swarm.resume") {
+          try {
+            await this.queue.add(
+              "swarm.execute",
+              { ...payload, kind: "swarm.execute", outboxEventId: event.id },
+              {
+                jobId:
+                  event.eventType === "swarm.resume"
+                    ? `swarm-${runId}-resume-${event.id}`
+                    : `swarm-${runId}`,
+              }
+            );
+            await prisma.outboxEvent.update({
+              where: { id: event.id },
+              data: { status: "PROCESSED", processedAt: new Date() },
+            });
+            dispatched++;
+          } catch (jobErr) {
+            console.warn(`[OutboxDispatcher] Error enqueueing swarm run ${runId}:`, jobErr);
+          }
+          continue;
+        }
+
         try {
           await this.queue.add("generate", { ...payload, outboxEventId: event.id }, {
-            jobId: runId, // Deterministic deduplication key
+            jobId:
+              event.eventType === "generation.resume"
+                ? `${runId}-resume-${event.id}`
+                : runId,
           });
 
           await prisma.outboxEvent.update({

@@ -2,11 +2,15 @@ import crypto from "node:crypto";
 import type { DeviceTaskDispatchFrame } from "@messiah/shared";
 import { CapabilityRegistry } from "../capabilities/capabilityRegistry.js";
 import { LocalDevicePolicyService } from "../security/localDevicePolicy.js";
-import { ReplayGuard } from "../security/replayGuard.js";
+import { ReplayGuard, ReplayGuardCorruptedError } from "../security/replayGuard.js";
 import { TaskSignatureVerifier } from "../security/taskSignatureVerifier.js";
 import { LogRedactor } from "../security/logRedactor.js";
 import { ProcessSandbox } from "../sandbox/processSandbox.js";
-import { SandboxUnavailableError, type ISandboxProvider } from "../sandbox/sandboxInterface.js";
+import {
+  SandboxUnavailableError,
+  SandboxPolicyViolationError,
+  type ISandboxProvider,
+} from "../sandbox/sandboxInterface.js";
 
 export interface TaskVerificationContext {
   hmacSecret: string;
@@ -139,7 +143,18 @@ export class TaskExecutor {
         ? { hmacSecret: verificationCtx, expectedDeviceId: frame.deviceId }
         : verificationCtx;
 
-    // 1. Validate Per-Device Identity, Workspace, Protocol Version & Audience
+    // 1. Fail closed immediately if persistent ReplayGuard store is corrupted
+    if (this.replayGuard.isCorrupted()) {
+      callbacks.onFailed(
+        taskId,
+        "REPLAY_STORE_CORRUPTED",
+        `Persistent replay guard store is corrupted and failed closed: ${this.replayGuard.getCorruptedReason()}`,
+        0
+      );
+      return;
+    }
+
+    // 1b. Validate Per-Device Identity, Workspace, Protocol Version & Audience
     if (!ctx.hmacSecret) {
       callbacks.onFailed(taskId, "MISSING_SIGNING_KEY", "Per-device HMAC signing key is not provisioned.", 0);
       return;
@@ -351,6 +366,16 @@ export class TaskExecutor {
       }
 
       const errorMsg = LogRedactor.redact(err instanceof Error ? err.message : String(err));
+      if (err instanceof ReplayGuardCorruptedError) {
+        emitLog("system", `[Security] REPLAY_STORE_CORRUPTED: ${errorMsg}`);
+        callbacks.onFailed(taskId, "REPLAY_STORE_CORRUPTED", errorMsg, durationMs);
+        return;
+      }
+      if (err instanceof SandboxPolicyViolationError) {
+        emitLog("system", `[Security] SANDBOX_POLICY_VIOLATION: ${errorMsg}`);
+        callbacks.onFailed(taskId, "SANDBOX_POLICY_VIOLATION", errorMsg, durationMs);
+        return;
+      }
       if (err instanceof SandboxUnavailableError) {
         emitLog("system", `[Security] SANDBOX_UNAVAILABLE: ${errorMsg}`);
         callbacks.onFailed(taskId, "SANDBOX_UNAVAILABLE", errorMsg, durationMs);

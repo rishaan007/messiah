@@ -496,4 +496,12 @@ Messiah targets the **2026-07-28 MCP Specification** using the official TypeScri
 
 ---
 
+## 8. Multi-Agent Swarm Runtime Integration (Phase 5)
+
+- **Unified Package Architecture (`@messiah/agents`)**: Shared DAG compilation (`SwarmDagValidator`), scoped inter-agent context construction (`SwarmContextBuilder`), Supervisor LLM planning/synthesis (`SwarmPlanner`), and durable runtime (`SwarmExecutionRuntime`) imported identically by both embedded `apps/server` workers and standalone `apps/worker` processes on `CHAT_GENERATION_QUEUE_NAME`.
+- **Provider Reuse**: All planning, worker execution, and final synthesis passes route directly through `defaultProviderRegistry.getAdapter(...)` (`OpenAIAdapter`, `AnthropicAdapter`, `GeminiAdapter`) and decrypt credentials on demand via `VaultService`.
+- **Unified Approval & Bridge Loop**: Both MCP `ToolApproval` records (`toolApprovalService`) and Workstation `BridgeTask` completions (`deviceConnectionGateway` / `deviceTaskService`) persist durable `swarm.resume` `OutboxEvent` entries so paused swarms resume reliably without polling or orphan leaks.
+
+---
+
 _End of Document: Messiah Integration Strategy & Connector Specification._

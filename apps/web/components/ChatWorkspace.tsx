@@ -40,6 +40,8 @@ import type {
   ToolCallInfo,
   ToolApprovalInfo,
   BridgeDeviceInfo,
+  AgentDefinitionInfo,
+  AgentRunInfo,
 } from "@messiah/shared";
 
 interface ChatWorkspaceProps {
@@ -95,6 +97,13 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
   // Local Agent Bridge Target State
   const [pairedDevices, setPairedDevices] = useState<BridgeDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
+
+  // Multi-Agent Swarm Mode State
+  const [executionMode, setExecutionMode] = useState<"single" | "swarm">("single");
+  const [workspaceAgents, setWorkspaceAgents] = useState<AgentDefinitionInfo[]>([]);
+  const [selectedSupervisorId, setSelectedSupervisorId] = useState<string>("");
+  const [selectedWorkerIds, setSelectedWorkerIds] = useState<string[]>([]);
+  const [activeSwarmRun, setActiveSwarmRun] = useState<AgentRunInfo | null>(null);
 
   // WebSocket State
   const [wsConnected, setWsConnected] = useState(false);
@@ -192,6 +201,26 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
         }
       })
       .catch((err) => console.error("Failed to load paired bridge devices:", err));
+
+    // Load workspace agents for optional Multi-Agent Swarm orchestration directly from Chat
+    fetch(`${apiUrl}/api/v1/agents?workspaceId=${activeWorkspace.id}`, {
+      headers: { Authorization: `Bearer ${authToken}` },
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => {
+        if (body?.success) {
+          const list: AgentDefinitionInfo[] = body.data || [];
+          setWorkspaceAgents(list);
+          const sup = list.find((a) => a.canSupervise && a.status === "ACTIVE");
+          if (sup) setSelectedSupervisorId((prev) => prev || sup.id);
+          const workers = list
+            .filter((a) => !a.canSupervise && a.status === "ACTIVE" && a.modelId)
+            .slice(0, 3)
+            .map((a) => a.id);
+          if (workers.length > 0) setSelectedWorkerIds((prev) => (prev.length ? prev : workers));
+        }
+      })
+      .catch((err) => console.error("Failed to load workspace agents:", err));
   }, [authToken, activeWorkspace, apiUrl]);
 
   // 3. Load Models for Selected Connection
@@ -749,7 +778,50 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
       }
     }
 
-    if (!targetThreadId || !selectedConnectionId || !selectedModelId) return;
+    if (!targetThreadId) return;
+
+    // Dispatch Multi-Agent Swarm run linked to this chat thread
+    if (executionMode === "swarm") {
+      if (!activeWorkspace || !selectedSupervisorId || selectedWorkerIds.length === 0) return;
+      const objectiveText = inputText.trim();
+      setInputText("");
+      setIsSending(true);
+      try {
+        const res = await fetch(`${apiUrl}/api/v1/swarms`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${authToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            workspaceId: activeWorkspace.id,
+            supervisorAgentId: selectedSupervisorId,
+            workerAgentIds: selectedWorkerIds,
+            objective: objectiveText,
+            threadId: targetThreadId,
+            targetBridgeDeviceId: selectedDeviceId || undefined,
+          }),
+        });
+        if (res.ok) {
+          const body = await res.json();
+          setActiveSwarmRun(body.data as AgentRunInfo);
+          // Refresh messages to immediately show queued swarm user + assistant placeholder messages
+          const msgRes = await fetch(`${apiUrl}/api/v1/threads/${targetThreadId}/messages?limit=100`, {
+            headers: { Authorization: `Bearer ${authToken}` },
+          });
+          if (msgRes.ok) {
+            setMessages((await msgRes.json()).data || []);
+          }
+        }
+      } catch (err) {
+        console.error("Failed launching swarm from chat:", err);
+      } finally {
+        setIsSending(false);
+      }
+      return;
+    }
+
+    if (!selectedConnectionId || !selectedModelId) return;
 
     const messageContent = inputText.trim();
     setInputText("");
@@ -1302,9 +1374,88 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
               </div>
             )}
 
+            {/* Active Swarm Banner inside Chat */}
+            {activeSwarmRun && (
+              <div className="px-4 py-2 bg-[#00FFA3]/10 border-t border-[#00FFA3]/30 text-xs text-[#F0F4FC] flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-[#00FFA3]" />
+                  <span>
+                    Multi-Agent Swarm Active ({selectedWorkerIds.length} workers coordinated)
+                  </span>
+                </div>
+                <Link
+                  href={`/swarms/${activeSwarmRun.id}`}
+                  className="font-mono text-[11px] text-[#00FFA3] hover:underline"
+                >
+                  Open 3D Constellation →
+                </Link>
+              </div>
+            )}
+
             {/* Bottom Composer Bar */}
             <div className="p-4 border-t border-[#1E2536] bg-[#0A0D14]">
               <div className="max-w-3xl mx-auto">
+                {/* Single Agent vs Multi-Agent Swarm Mode Switch */}
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                  <div className="inline-flex rounded-lg border border-[#1E2536] bg-[#0E121B] p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setExecutionMode("single")}
+                      className={cn(
+                        "px-2.5 py-1 rounded-md transition-colors",
+                        executionMode === "single"
+                          ? "bg-[#171D2B] text-[#F0F4FC] font-medium"
+                          : "text-[#64748B] hover:text-[#CBD5E1]"
+                      )}
+                    >
+                      Single Agent
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExecutionMode("swarm")}
+                      className={cn(
+                        "px-2.5 py-1 rounded-md flex items-center gap-1 transition-colors",
+                        executionMode === "swarm"
+                          ? "bg-[#00FFA3]/15 text-[#00FFA3] font-medium"
+                          : "text-[#64748B] hover:text-[#CBD5E1]"
+                      )}
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      Multi-Agent Swarm
+                    </button>
+                  </div>
+
+                  {executionMode === "swarm" && (
+                    <div className="flex items-center gap-2 text-[#94A3B8]">
+                      {workspaceAgents.length === 0 ? (
+                        <Link href="/agents" className="text-[#00FFA3] hover:underline">
+                          Configure agents in Registry →
+                        </Link>
+                      ) : (
+                        <>
+                          <select
+                            value={selectedSupervisorId}
+                            onChange={(e) => setSelectedSupervisorId(e.target.value)}
+                            className="rounded border border-[#1E2536] bg-[#0E121B] px-2 py-1 text-[11px] text-[#F0F4FC]"
+                          >
+                            <option value="">Supervisor...</option>
+                            {workspaceAgents
+                              .filter((a) => a.canSupervise && a.status === "ACTIVE")
+                              .map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  Lead: {a.name}
+                                </option>
+                              ))}
+                          </select>
+                          <span className="font-mono text-[10px] text-[#00FFA3]">
+                            {selectedWorkerIds.length} workers ready
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 <div className="relative rounded-xl border border-[#1E2536] bg-[#0E121B] focus-within:border-[#00FFA3] transition-colors">
                   <textarea
                     ref={inputRef}

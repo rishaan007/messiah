@@ -428,6 +428,24 @@ Every security-sensitive event writes an immutable record to the `audit_logs` ta
 - Tasks dispatched over WSS carry HMAC-SHA256 server signatures (`MESSIAH_TASK_AUTH:...`) verified locally with `ReplayGuard` nonce deduplication.
 - Local filesystem mutations pass canonical `PathGuard` realpath containment checks against administrator-approved project roots, blocking symlinks escaping roots and high-risk secret files (`.ssh`, `.aws`, `.env`).
 - Local processes spawn strictly with argument arrays (`shell: false`), scrubbed environments, and process-tree termination on timeout or cancellation.
+- **Stage 11 Hardening**:
+  - `ReplayGuard` persists SHA-256 integrity checksums atomically and **fails closed** (`REPLAY_STORE_CORRUPTED`) if `replay_guard.json` is malformed, truncated, or tampered with (never silently resets empty).
+  - `ProcessSandbox` requires explicit destination host/port allowlists (`networkAllowedHosts` / `networkAllowedPorts`) whenever `networkAllowed` is `true`, refusing blanket unrestricted egress (`SANDBOX_POLICY_VIOLATION`) and enforcing loopback egress proxy filtering under Seatbelt kernel port restrictions on macOS.
+  - Local stdio MCP executables undergo pre-spawn and post-spawn `O_NOFOLLOW` descriptor SHA-256 verification to mitigate TOCTOU binary replacement races.
+
+---
+
+## 14. Multi-Agent Swarm Security & Permission Inheritance (Phase 5)
+
+1. **Zero Secret Leakage & Scoped Context**:
+   - `AgentRegistryService` validates referenced `providerConnectionId`, `allowedMcpToolIds`, and `preferredBridgeDeviceId` strictly against the calling workspace to block cross-tenant reference injection.
+   - `SwarmContextBuilder` transmits only task instructions and explicitly referenced `inputTaskKeys` summaries (never full user transcripts, raw encrypted secrets, or internal chain-of-thought), scrubbing secret patterns prior to storage and framing upstream deliverables inside `<UNTRUSTED_AGENT_OUTPUT trusted="false">` delimiters.
+2. **Strict Tool & Bridge Inheritance**:
+   - Worker agents execute with the intersection of `agent.allowedMcpToolIds`, live `McpToolPermission` modes (`DISABLED` excluded), and target `BridgeDevice` capabilities/policies.
+   - Mutating tools and privileged Bridge capabilities enforce single-use human approval (`ToolApproval` / `BridgeTaskApproval`), pausing both the DAG task and owning swarm run in `AWAITING_APPROVAL` until an authorized `OWNER`/`ADMIN` approves or denies via atomic transaction + `swarm.resume` outbox event.
+3. **Runaway Recursion, Loop & Cost Protections**:
+   - `SwarmDagValidator` rejects cycles (`CYCLE_DETECTED`) and duplicate task delegation fingerprints (`DUPLICATE_TASK_FINGERPRINT`).
+   - `SwarmExecutionRuntime` enforces hard per-run `maxTotalTokens`, `maxCostUsd`, `maxDurationMs`, `maxConcurrency`, and `maxDelegationDepth` limits.
 
 ---
 
