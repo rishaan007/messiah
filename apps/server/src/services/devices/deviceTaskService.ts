@@ -34,6 +34,8 @@ export class DeviceTaskService {
     generationRunId?: string;
     agentRunId?: string;
     agentTaskId?: string;
+    workflowRunId?: string;
+    workflowNodeExecId?: string;
   }) {
     const isMember = await workspaceService.isUserMember(params.workspaceId, params.userId);
     if (!isMember) {
@@ -133,6 +135,8 @@ export class DeviceTaskService {
         generationRunId: params.generationRunId,
         agentRunId: params.agentRunId,
         agentTaskId: params.agentTaskId,
+        workflowRunId: params.workflowRunId,
+        workflowNodeExecId: params.workflowNodeExecId,
       },
     });
 
@@ -450,6 +454,39 @@ export class DeviceTaskService {
               outboxEventId: swarmOutbox.id,
             },
             `swarm-${txResult.updatedTask.agentRunId}-bridge-deny-${swarmOutbox.id}`
+          )
+          .catch(() => {});
+      }
+
+      if (txResult.updatedTask.workflowRunId) {
+        const wfOutbox = await prisma.outboxEvent.create({
+          data: {
+            eventType: "workflow.resume",
+            aggregateType: "WorkflowRun",
+            aggregateId: txResult.updatedTask.workflowRunId,
+            payload: {
+              kind: "workflow.execute",
+              runId: txResult.updatedTask.workflowRunId,
+              workspaceId,
+              userId,
+            },
+            status: "PENDING",
+          },
+        });
+        await prisma.workflowRun.updateMany({
+          where: { id: txResult.updatedTask.workflowRunId, status: "AWAITING_APPROVAL" },
+          data: { status: "RUNNING" },
+        });
+        await chatQueueManager
+          .enqueueWorkflowRun(
+            {
+              kind: "workflow.execute",
+              runId: txResult.updatedTask.workflowRunId,
+              workspaceId,
+              userId,
+              outboxEventId: wfOutbox.id,
+            },
+            `workflow-${txResult.updatedTask.workflowRunId}-bridge-deny-${wfOutbox.id}`
           )
           .catch(() => {});
       }

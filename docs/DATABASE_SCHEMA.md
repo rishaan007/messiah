@@ -1219,4 +1219,25 @@ Migration `8_multi_agent_orchestration` extends `mcp_tool_calls` and `bridge_tas
 
 ---
 
+## 13. Vector Memory & Workflow Automation Persistence (Phase 6)
+
+Migration `9_vector_memory_and_workflows` enables `CREATE EXTENSION IF NOT EXISTS vector;` on PostgreSQL 16 (`pgvector`), extends `mcp_tool_calls` and `bridge_tasks` with optional `workflow_run_id` / `workflow_node_exec_id` foreign columns, and creates sixteen Phase 6 tables across Vector Memory and Workflow Automation:
+
+### 13.1 Long-Term Vector Memory (`memories` + `memory_embeddings`)
+- `memory_settings`: Workspace-level embedding provider, model, vector dimensionality (`embedding_dimensions`, default `1536`), provider connection binding, chat/swarm injection toggles, auto-capture opt-in, `default_top_k`, `min_similarity_score`, and retention days.
+- `memory_collections`: Scoped collections (`PERSONAL`, `WORKSPACE`, `AGENT`) grouping memories safely.
+- `memories`: Durable memory records partitioned by `scope` (`PERSONAL`, `WORKSPACE`, `AGENT`), `owner_user_id` (enforced on `PERSONAL`), `agent_id` (enforced on `AGENT`), source provenance (`source_type`, `source_thread_id`, `source_message_id`, `source_agent_run_id`, `source_workflow_run_id`), normalized `content_hash`, `sensitivity`, `importance`, `current_version`, and optional `expires_at` TTL. Indexed with a PostgreSQL GIN `to_tsvector('english', title || ' ' || content)` index (`idx_memories_lexical_tsv`) for lexical fallback.
+- `memory_embeddings`: Stores unparameterized `vector` embeddings alongside explicit `embedding_provider`, `embedding_model`, and `embedding_dimensions`, paired with dimension-partitioned partial HNSW cosine indexes (`idx_memory_embeddings_hnsw_1536` and `idx_memory_embeddings_hnsw_768`) allowing safe model/dimension migrations via `reembedWorkspaceMemories`.
+- `memory_versions`: Immutable per-revision snapshots recorded on creation and conflict/edit updates.
+- `memory_access_policies`: Explicit deny/allow ACL records evaluated inside SQL queries before vector ranking.
+
+### 13.2 Visual Workflow Automation Engine (`workflow_*`)
+- `workflow_definitions` (`WorkflowStatus`: `DRAFT`, `ACTIVE`, `PAUSED`, `ARCHIVED`): Draft DAG graph JSON, active version pointer, category, and starter template marker.
+- `workflow_versions`: Immutable validated DAG snapshots (`definition_json` + `graph_hash`) executed deterministically across runs.
+- `workflow_schedules`: Durable PostgreSQL cron schedules (`cron_expression`, IANA `timezone`, `next_run_at`, `misfire_policy` [`SKIP`, `FIRE_ONCE`, `CATCH_UP_BOUNDED`], `concurrency_policy` [`SKIP_IF_RUNNING`, `ALLOW_CONCURRENT`, `REPLACE_QUEUED`]) claimed atomically via optimistic compare-and-set on `next_run_at`.
+- `workflow_event_triggers` & `workflow_event_logs`: Subscribes workflows to internal Messiah domain events (`chat.completed`, `swarm.completed`, `bridge.task.completed`, `memory.created`, `workflow.completed`, etc.) with `(trigger_id, dedup_key)` uniqueness, cooldowns, and recursion-depth guards.
+- `workflow_runs`, `workflow_node_executions`, `workflow_approvals`, & `workflow_run_events`: Full durable run state machine supporting conditional branch skipping (`SKIPPED`), parallel `merge` joins, human approval gates (`WorkflowApproval`), linked MCP `ToolCall` and Bridge `BridgeTask` pauses, and sequenced WebSocket event replay.
+
+---
+
 _End of Document: Messiah Database Schema & Persistence Specification._

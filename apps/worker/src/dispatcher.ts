@@ -39,7 +39,16 @@ export class OutboxDispatcher {
       const pendingEvents = await prisma.outboxEvent.findMany({
         where: {
           status: "PENDING",
-          eventType: { in: ["generation.dispatch", "generation.resume", "swarm.dispatch", "swarm.resume"] },
+          eventType: {
+            in: [
+              "generation.dispatch",
+              "generation.resume",
+              "swarm.dispatch",
+              "swarm.resume",
+              "workflow.dispatch",
+              "workflow.resume",
+            ],
+          },
         },
         orderBy: { createdAt: "asc" },
         take: 50,
@@ -49,6 +58,29 @@ export class OutboxDispatcher {
       for (const event of pendingEvents) {
         const payload = event.payload as Record<string, unknown>;
         const runId = String(payload.runId || event.aggregateId);
+
+        if (event.eventType === "workflow.dispatch" || event.eventType === "workflow.resume") {
+          try {
+            await this.queue.add(
+              "workflow.execute",
+              { ...payload, kind: "workflow.execute", outboxEventId: event.id },
+              {
+                jobId:
+                  event.eventType === "workflow.resume"
+                    ? `workflow-${runId}-resume-${event.id}`
+                    : `workflow-${runId}`,
+              }
+            );
+            await prisma.outboxEvent.update({
+              where: { id: event.id },
+              data: { status: "PROCESSED", processedAt: new Date() },
+            });
+            dispatched++;
+          } catch (jobErr) {
+            console.warn(`[OutboxDispatcher] Error enqueueing workflow run ${runId}:`, jobErr);
+          }
+          continue;
+        }
 
         if (event.eventType === "swarm.dispatch" || event.eventType === "swarm.resume") {
           try {

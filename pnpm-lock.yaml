@@ -254,12 +254,18 @@ importers:
       '@messiah/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
+      '@messiah/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@messiah/providers':
         specifier: workspace:*
         version: link:../../packages/providers
       '@messiah/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@messiah/workflows':
+        specifier: workspace:*
+        version: link:../../packages/workflows
       bullmq:
         specifier: ^6.7.8
         version: 6.7.8(ioredis@5.11.1(supports-color@7.2.0))
@@ -409,12 +415,18 @@ importers:
       '@messiah/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp
+      '@messiah/memory':
+        specifier: workspace:*
+        version: link:../../packages/memory
       '@messiah/providers':
         specifier: workspace:*
         version: link:../../packages/providers
       '@messiah/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@messiah/workflows':
+        specifier: workspace:*
+        version: link:../../packages/workflows
       bullmq:
         specifier: ^6.7.8
         version: 6.7.8(ioredis@5.11.1(supports-color@7.2.0))
@@ -455,6 +467,9 @@ importers:
       '@messiah/mcp':
         specifier: workspace:*
         version: link:../mcp
+      '@messiah/memory':
+        specifier: workspace:*
+        version: link:../memory
       '@messiah/providers':
         specifier: workspace:*
         version: link:../providers
@@ -528,6 +543,34 @@ importers:
       zod:
         specifier: ^3.25.76
         version: 3.25.76
+    devDependencies:
+      '@messiah/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.2
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.33)(supports-color@7.2.0)(tsx@4.23.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@24.19.2)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.15)
+
+  packages/memory:
+    dependencies:
+      '@messiah/db':
+        specifier: workspace:*
+        version: link:../db
+      '@messiah/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@messiah/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       '@messiah/config':
         specifier: workspace:*
@@ -634,6 +677,43 @@ importers:
       typescript:
         specifier: ^5.8.2
         version: 5.9.3
+
+  packages/workflows:
+    dependencies:
+      '@messiah/agents':
+        specifier: workspace:*
+        version: link:../agents
+      '@messiah/db':
+        specifier: workspace:*
+        version: link:../db
+      '@messiah/mcp':
+        specifier: workspace:*
+        version: link:../mcp
+      '@messiah/memory':
+        specifier: workspace:*
+        version: link:../memory
+      '@messiah/providers':
+        specifier: workspace:*
+        version: link:../providers
+      '@messiah/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@messiah/config':
+        specifier: workspace:*
+        version: link:../config
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.2
+      tsup:
+        specifier: ^8.5.1
+        version: 8.5.1(jiti@2.7.0)(postcss@8.5.33)(supports-color@7.2.0)(tsx@4.23.15)(typescript@5.9.3)
+      typescript:
+        specifier: ^5.8.2
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.7
+        version: 3.2.7(@types/node@24.19.2)(jiti@2.7.0)(supports-color@7.2.0)(tsx@4.23.15)
 
 packages:
 

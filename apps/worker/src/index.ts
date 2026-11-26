@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+import { WorkflowSchedulerEngine } from "@messiah/workflows";
 import { ChatGenerationWorker } from "./worker.js";
 import { OutboxDispatcher } from "./dispatcher.js";
 
@@ -17,8 +18,15 @@ async function main() {
   dispatcher.startPeriodicSweep(5000);
   console.log(`[Messiah Worker] Outbox dispatcher running periodic sweep every 5000ms.`);
 
+  const workflowScheduler = new WorkflowSchedulerEngine(async () => {
+    await dispatcher.sweep();
+  });
+  workflowScheduler.startPeriodicSweep(15_000);
+  console.log(`[Messiah Worker] Durable Workflow cron scheduler running every 15000ms.`);
+
   const shutdown = async (signal: string) => {
     console.log(`[Messiah Worker] Received ${signal}. Shutting down worker gracefully...`);
+    workflowScheduler.stop();
     await dispatcher.close();
     await worker.close();
     console.log(`[Messiah Worker] Shutdown complete.`);

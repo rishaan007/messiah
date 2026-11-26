@@ -96,6 +96,7 @@ export interface ProviderCapabilityMap {
   vision: boolean;
   systemPrompt: boolean;
   modelListing: boolean;
+  embeddings?: boolean;
 }
 
 export interface ProviderMetadataInfo {
@@ -1274,3 +1275,372 @@ export interface SwarmStreamEvent {
 }
 
 
+
+
+// ==============================================================================
+// Phase 6: Vector Memory & Workflow Automation Types
+// ==============================================================================
+
+export type MemoryScope = "PERSONAL" | "WORKSPACE" | "AGENT";
+export type MemorySourceType =
+  | "MANUAL"
+  | "CONVERSATION_SUMMARY"
+  | "PREFERENCE"
+  | "WORKSPACE_DECISION"
+  | "AGENT_FINDING"
+  | "WORKFLOW_OUTPUT"
+  | "ARTIFACT";
+export type MemorySensitivity =
+  | "PUBLIC_WORKSPACE"
+  | "PERSONAL_PRIVATE"
+  | "AGENT_RESTRICTED"
+  | "SENSITIVE_REDACTED";
+
+export interface MemorySettingsInfo {
+  id: string;
+  workspaceId: string;
+  embeddingProvider: SupportedProviderId | string | null;
+  embeddingModel: string | null;
+  embeddingDimensions: number;
+  providerConnectionId: string | null;
+  enableAutoCapture: boolean;
+  enableChatInjection: boolean;
+  enableSwarmInjection: boolean;
+  defaultTopK: number;
+  minSimilarityScore: number;
+  retentionDays: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryCollectionInfo {
+  id: string;
+  workspaceId: string;
+  scope: MemoryScope;
+  ownerUserId: string | null;
+  agentId: string | null;
+  name: string;
+  slug: string;
+  description: string | null;
+  memoryCount?: number;
+  createdByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MemoryVersionInfo {
+  id: string;
+  memoryId: string;
+  versionNumber: number;
+  title: string;
+  content: string;
+  contentHash: string;
+  changeReason: string | null;
+  editedByUserId: string | null;
+  createdAt: string;
+}
+
+export interface MemoryInfo {
+  id: string;
+  workspaceId: string;
+  scope: MemoryScope;
+  ownerUserId: string | null;
+  agentId: string | null;
+  agentName?: string | null;
+  collectionId: string | null;
+  collectionName?: string | null;
+  sourceType: MemorySourceType;
+  sourceThreadId: string | null;
+  sourceMessageId: string | null;
+  sourceAgentRunId: string | null;
+  sourceWorkflowRunId: string | null;
+  title: string;
+  content: string;
+  summary: string | null;
+  contentHash: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  importance: number;
+  sensitivity: MemorySensitivity;
+  isPinned: boolean;
+  isArchived: boolean;
+  currentVersion: number;
+  accessCount: number;
+  lastAccessedAt: string | null;
+  expiresAt: string | null;
+  embeddingStatus?: string | null;
+  embeddingModel?: string | null;
+  embeddingDimensions?: number | null;
+  createdByUserId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  versions?: MemoryVersionInfo[];
+}
+
+export interface MemorySearchMatch {
+  memory: MemoryInfo;
+  score: number;
+  semanticScore: number;
+  lexicalScore: number;
+  matchMode: "vector" | "hybrid" | "lexical_fallback";
+}
+
+export interface MemorySearchResponse {
+  query: string;
+  mode: "vector" | "hybrid" | "lexical_fallback";
+  embeddingProvider: string | null;
+  embeddingModel: string | null;
+  matches: MemorySearchMatch[];
+}
+
+export type WorkflowStatus = "DRAFT" | "ACTIVE" | "PAUSED" | "ARCHIVED";
+export type WorkflowTriggerType = "MANUAL" | "SCHEDULE" | "EVENT";
+export type WorkflowMisfirePolicy = "SKIP" | "FIRE_ONCE" | "CATCH_UP_BOUNDED";
+export type WorkflowConcurrencyPolicy = "SKIP_IF_RUNNING" | "ALLOW_CONCURRENT" | "REPLACE_QUEUED";
+export type WorkflowRunStatus =
+  | "PENDING"
+  | "RUNNING"
+  | "AWAITING_APPROVAL"
+  | "COMPLETED"
+  | "PARTIAL_COMPLETED"
+  | "FAILED"
+  | "CANCELLED";
+export type WorkflowNodeStatus =
+  | "PENDING"
+  | "QUEUED"
+  | "RUNNING"
+  | "AWAITING_APPROVAL"
+  | "COMPLETED"
+  | "FAILED"
+  | "SKIPPED"
+  | "CANCELLED"
+  | "UNKNOWN_OUTCOME";
+
+export type WorkflowNodeType =
+  | "manual_trigger"
+  | "schedule_trigger"
+  | "event_trigger"
+  | "run_agent"
+  | "run_swarm"
+  | "mcp_tool"
+  | "bridge_capability"
+  | "condition"
+  | "approval_gate"
+  | "transform"
+  | "merge"
+  | "store_result"
+  | "completion";
+
+export interface WorkflowNodeSpec {
+  id: string;
+  type: WorkflowNodeType;
+  title: string;
+  position: { x: number; y: number };
+  config: Record<string, unknown>;
+  retryPolicy?: {
+    maxAttempts?: number;
+    backoffMs?: number;
+    sideEffectSafe?: boolean;
+  };
+  timeoutMs?: number;
+}
+
+export interface WorkflowEdgeSpec {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: string;
+  targetHandle?: string;
+  label?: string;
+}
+
+export interface WorkflowGraphDefinition {
+  nodes: WorkflowNodeSpec[];
+  edges: WorkflowEdgeSpec[];
+}
+
+export interface WorkflowValidationIssue {
+  severity: "error" | "warning";
+  nodeId?: string;
+  edgeId?: string;
+  code: string;
+  message: string;
+}
+
+export interface WorkflowValidationResult {
+  valid: boolean;
+  issues: WorkflowValidationIssue[];
+  topologicalOrder: string[];
+  triggerNodeIds: string[];
+}
+
+export interface WorkflowScheduleInfo {
+  id: string;
+  workflowId: string;
+  workspaceId: string;
+  versionId: string | null;
+  cronExpression: string;
+  timezone: string;
+  enabled: boolean;
+  misfirePolicy: WorkflowMisfirePolicy;
+  concurrencyPolicy: WorkflowConcurrencyPolicy;
+  staticInput: Record<string, unknown>;
+  lastTriggeredAt: string | null;
+  nextRunAt: string | null;
+  consecutiveFailures: number;
+  lastError: string | null;
+}
+
+export interface WorkflowEventTriggerInfo {
+  id: string;
+  workflowId: string;
+  workspaceId: string;
+  versionId: string | null;
+  eventType: string;
+  filterRules: Record<string, unknown>;
+  cooldownSeconds: number;
+  enabled: boolean;
+  lastTriggeredAt: string | null;
+}
+
+export interface WorkflowVersionInfo {
+  id: string;
+  workflowId: string;
+  workspaceId: string;
+  versionNumber: number;
+  definitionJson: WorkflowGraphDefinition;
+  graphHash: string;
+  publishedByUserId: string | null;
+  publishedAt: string;
+  createdAt: string;
+}
+
+export interface WorkflowDefinitionInfo {
+  id: string;
+  workspaceId: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  category: string;
+  status: WorkflowStatus;
+  activeVersionNumber: number | null;
+  draftGraph: WorkflowGraphDefinition;
+  defaultInputSchema: Record<string, unknown> | null;
+  isTemplate: boolean;
+  createdByUserId: string | null;
+  schedule?: WorkflowScheduleInfo | null;
+  eventTriggers?: WorkflowEventTriggerInfo[];
+  versions?: WorkflowVersionInfo[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowNodeExecutionInfo {
+  id: string;
+  runId: string;
+  workflowId: string;
+  workspaceId: string;
+  nodeId: string;
+  nodeType: WorkflowNodeType | string;
+  title: string;
+  status: WorkflowNodeStatus;
+  attemptCount: number;
+  inputData: Record<string, unknown> | null;
+  outputData: Record<string, unknown> | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  durationMs: number | null;
+  agentRunId: string | null;
+  toolCallId: string | null;
+  bridgeTaskId: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface WorkflowApprovalInfo {
+  id: string;
+  runId: string;
+  nodeExecutionId: string;
+  workflowId: string;
+  workspaceId: string;
+  nodeId: string;
+  requestedByUserId: string | null;
+  decidedByUserId: string | null;
+  status: "PENDING" | "APPROVED" | "DENIED" | "EXPIRED";
+  title: string;
+  summary: string;
+  contextPreview: Record<string, unknown>;
+  expiresAt: string;
+  decidedAt: string | null;
+  rejectionReason: string | null;
+  createdAt: string;
+}
+
+export interface WorkflowRunEventInfo {
+  id: string;
+  runId: string;
+  workspaceId: string;
+  sequence: number;
+  eventType: string;
+  nodeId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface WorkflowRunInfo {
+  id: string;
+  workflowId: string;
+  workflowName?: string;
+  versionId: string;
+  workspaceId: string;
+  triggeredByUserId: string | null;
+  triggerType: WorkflowTriggerType;
+  triggerEventId: string | null;
+  correlationId: string | null;
+  status: WorkflowRunStatus;
+  triggerPayload: Record<string, unknown>;
+  finalOutput: Record<string, unknown> | null;
+  finalSummary: string | null;
+  safeErrorCode: string | null;
+  errorMessage: string | null;
+  cancellationRequestedAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkflowRunDetail extends WorkflowRunInfo {
+  version: WorkflowVersionInfo;
+  nodeExecutions: WorkflowNodeExecutionInfo[];
+  approvals: WorkflowApprovalInfo[];
+  events: WorkflowRunEventInfo[];
+  pendingToolApprovals?: ToolApprovalInfo[];
+  bridgeTasks?: BridgeTaskInfo[];
+}
+
+export type WorkflowStreamEventType =
+  | "workflow.run.started"
+  | "workflow.run.awaiting_approval"
+  | "workflow.run.completed"
+  | "workflow.run.partial_completed"
+  | "workflow.run.failed"
+  | "workflow.run.cancelled"
+  | "workflow.node.queued"
+  | "workflow.node.started"
+  | "workflow.node.completed"
+  | "workflow.node.skipped"
+  | "workflow.node.failed"
+  | "workflow.node.awaiting_approval"
+  | "workflow.approval.resolved";
+
+export interface WorkflowStreamEvent {
+  type: WorkflowStreamEventType;
+  runId: string;
+  workflowId: string;
+  workspaceId: string;
+  nodeId?: string | null;
+  sequence: number;
+  timestamp: string;
+  payload: Record<string, unknown>;
+}

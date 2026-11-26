@@ -342,9 +342,10 @@ export class ToolApprovalService {
 
       const run = toolCall.generationRun;
       const agentRunId = toolCall.agentRunId;
+      const workflowRunId = toolCall.workflowRunId;
       const thread = run?.thread;
 
-      if (!run && !agentRunId) {
+      if (!run && !agentRunId && !workflowRunId) {
         throw new ToolApprovalServiceError("Tool call is not associated with any active run.", 400, "INVALID_RUN_STATE");
       }
 
@@ -415,8 +416,40 @@ export class ToolApprovalService {
           toolCall: updatedToolCall,
           run,
           agentRunId: null as string | null,
+          workflowRunId: null as string | null,
           outboxEvent,
           jobPayload,
+        };
+      }
+
+      if (workflowRunId) {
+        await tx.workflowRun.updateMany({
+          where: { id: workflowRunId, status: "AWAITING_APPROVAL" },
+          data: { status: "RUNNING" },
+        });
+        const wfOutbox = await tx.outboxEvent.create({
+          data: {
+            eventType: "workflow.resume",
+            aggregateType: "WorkflowRun",
+            aggregateId: workflowRunId,
+            payload: {
+              kind: "workflow.execute",
+              runId: workflowRunId,
+              workspaceId: approval.workspaceId,
+              userId: decidedByUserId,
+            },
+            status: "PENDING",
+          },
+        });
+
+        return {
+          approval: updatedApproval,
+          toolCall: updatedToolCall,
+          run: null,
+          agentRunId: null as string | null,
+          workflowRunId,
+          outboxEvent: wfOutbox,
+          jobPayload: null as GenerationJobPayload | null,
         };
       }
 
@@ -445,12 +478,13 @@ export class ToolApprovalService {
         toolCall: updatedToolCall,
         run: null,
         agentRunId: agentRunId!,
+        workflowRunId: null as string | null,
         outboxEvent: swarmOutbox,
         jobPayload: null as GenerationJobPayload | null,
       };
     });
 
-    const { approval: updatedApproval, run, agentRunId, outboxEvent, jobPayload } = txResult;
+    const { approval: updatedApproval, run, agentRunId, workflowRunId, outboxEvent, jobPayload } = txResult;
 
     if (run && jobPayload) {
       // Resumption: Enqueue to BullMQ with deterministic jobId bound to outbox event
@@ -491,6 +525,19 @@ export class ToolApprovalService {
           },
         },
       });
+    } else if (workflowRunId) {
+      chatQueueManager
+        .enqueueWorkflowRun(
+          {
+            kind: "workflow.execute",
+            runId: workflowRunId,
+            workspaceId: updatedApproval.workspaceId,
+            userId: decidedByUserId,
+            outboxEventId: outboxEvent.id,
+          },
+          `workflow-${workflowRunId}-resume-${outboxEvent.id}`
+        )
+        .catch(() => {});
     } else if (agentRunId) {
       chatQueueManager
         .enqueueSwarmRun(
@@ -631,9 +678,10 @@ export class ToolApprovalService {
 
       const run = toolCall.generationRun;
       const agentRunId = toolCall.agentRunId;
+      const workflowRunId = toolCall.workflowRunId;
       const thread = run?.thread;
 
-      if (!run && !agentRunId) {
+      if (!run && !agentRunId && !workflowRunId) {
         throw new ToolApprovalServiceError("Tool call is not associated with any active run.", 400, "INVALID_RUN_STATE");
       }
 
@@ -674,8 +722,39 @@ export class ToolApprovalService {
           toolCall: updatedToolCall,
           run,
           agentRunId: null as string | null,
+          workflowRunId: null as string | null,
           outboxEvent,
           jobPayload,
+        };
+      }
+
+      if (workflowRunId) {
+        await tx.workflowRun.updateMany({
+          where: { id: workflowRunId, status: "AWAITING_APPROVAL" },
+          data: { status: "RUNNING" },
+        });
+        const wfOutbox = await tx.outboxEvent.create({
+          data: {
+            eventType: "workflow.resume",
+            aggregateType: "WorkflowRun",
+            aggregateId: workflowRunId,
+            payload: {
+              kind: "workflow.execute",
+              runId: workflowRunId,
+              workspaceId: approval.workspaceId,
+              userId: decidedByUserId,
+            },
+            status: "PENDING",
+          },
+        });
+        return {
+          approval: updatedApproval,
+          toolCall: updatedToolCall,
+          run: null,
+          agentRunId: null as string | null,
+          workflowRunId,
+          outboxEvent: wfOutbox,
+          jobPayload: null as GenerationJobPayload | null,
         };
       }
 
@@ -704,12 +783,13 @@ export class ToolApprovalService {
         toolCall: updatedToolCall,
         run: null,
         agentRunId: agentRunId!,
+        workflowRunId: null as string | null,
         outboxEvent: swarmOutbox,
         jobPayload: null as GenerationJobPayload | null,
       };
     });
 
-    const { approval: updatedApproval, run, agentRunId, outboxEvent, jobPayload } = txResult;
+    const { approval: updatedApproval, run, agentRunId, workflowRunId, outboxEvent, jobPayload } = txResult;
 
     if (run && jobPayload) {
       // Resumption: Enqueue to BullMQ with deterministic jobId bound to outbox event
@@ -751,6 +831,19 @@ export class ToolApprovalService {
           },
         },
       });
+    } else if (workflowRunId) {
+      chatQueueManager
+        .enqueueWorkflowRun(
+          {
+            kind: "workflow.execute",
+            runId: workflowRunId,
+            workspaceId: updatedApproval.workspaceId,
+            userId: decidedByUserId,
+            outboxEventId: outboxEvent.id,
+          },
+          `workflow-${workflowRunId}-resume-${outboxEvent.id}`
+        )
+        .catch(() => {});
     } else if (agentRunId) {
       chatQueueManager
         .enqueueSwarmRun(

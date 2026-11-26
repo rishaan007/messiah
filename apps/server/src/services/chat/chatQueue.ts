@@ -1,6 +1,7 @@
 import { Queue, type ConnectionOptions } from "bullmq";
 import { prisma } from "@messiah/db";
 import type { SwarmJobPayload } from "@messiah/agents";
+import type { WorkflowJobPayload } from "@messiah/workflows";
 
 export const CHAT_GENERATION_QUEUE_NAME = "messiah-chat-generation";
 
@@ -117,6 +118,33 @@ export class ChatQueueManager {
     }
   }
 
+  public async enqueueWorkflowRun(payload: WorkflowJobPayload, jobIdOverride?: string): Promise<boolean> {
+    if (!this.queue) {
+      return false;
+    }
+
+    try {
+      await this.queue.add("workflow.execute", payload as unknown as GenerationJobPayload, {
+        jobId: jobIdOverride || `workflow-${payload.runId}`,
+      });
+
+      if (payload.outboxEventId) {
+        await prisma.outboxEvent.update({
+          where: { id: payload.outboxEventId },
+          data: {
+            status: "PROCESSED",
+            processedAt: new Date(),
+          },
+        }).catch(() => {});
+      }
+
+      return true;
+    } catch (err) {
+      console.warn(`[ChatQueueManager] Failed to enqueue workflow job for run ${payload.runId}:`, err);
+      return false;
+    }
+  }
+
   /**
    * Outbox Sweeper: Finds any PENDING outbox events and dispatches them to BullMQ.
    */
@@ -129,7 +157,16 @@ export class ChatQueueManager {
       const pendingEvents = await prisma.outboxEvent.findMany({
         where: {
           status: "PENDING",
-          eventType: { in: ["generation.dispatch", "generation.resume", "swarm.dispatch", "swarm.resume"] },
+          eventType: {
+            in: [
+              "generation.dispatch",
+              "generation.resume",
+              "swarm.dispatch",
+              "swarm.resume",
+              "workflow.dispatch",
+              "workflow.resume",
+            ],
+          },
         },
         orderBy: { createdAt: "asc" },
         take: 50,
@@ -137,6 +174,17 @@ export class ChatQueueManager {
 
       let dispatchedCount = 0;
       for (const event of pendingEvents) {
+        if (event.eventType === "workflow.dispatch" || event.eventType === "workflow.resume") {
+          const payload = event.payload as unknown as WorkflowJobPayload;
+          payload.outboxEventId = event.id;
+          const jobId =
+            event.eventType === "workflow.resume"
+              ? `workflow-${payload.runId}-resume-${event.id}`
+              : `workflow-${payload.runId}`;
+          const ok = await this.enqueueWorkflowRun(payload, jobId);
+          if (ok) dispatchedCount++;
+          continue;
+        }
         if (event.eventType === "swarm.dispatch" || event.eventType === "swarm.resume") {
           const payload = event.payload as unknown as SwarmJobPayload;
           payload.outboxEventId = event.id;

@@ -17,6 +17,7 @@ import {
   type ProviderChatMessage,
   type ProviderToolDefinition,
 } from "@messiah/providers";
+import { MemoryService } from "@messiah/memory";
 import type {
   SupportedProviderId,
   SwarmExecutionPlan,
@@ -140,8 +141,13 @@ export class SwarmExecutionRuntime {
   );
   private schemaValidator = new ToolSchemaValidator();
   private eventEmitChains = new Map<string, Promise<void>>();
+  private memoryService: MemoryService;
 
-  constructor(private readonly deps: SwarmRuntimeDependencies) {}
+  constructor(private readonly deps: SwarmRuntimeDependencies) {
+    this.memoryService = new MemoryService({
+      decryptProviderSecret: this.deps.decryptProviderSecret,
+    });
+  }
 
   private async emitRunEvent(params: {
     runId: string;
@@ -1309,6 +1315,23 @@ export class SwarmExecutionRuntime {
       );
 
       const toolDescriptions = definitions.map((d) => `${d.name}: ${d.description || ""}`);
+      let workerMemoryContext = "";
+      try {
+        const memBundle = await this.memoryService.buildPromptMemoryBlock({
+          workspaceId: run.workspaceId,
+          userId: run.createdByUserId || "00000000-0000-0000-0000-000000000000",
+          query: `${task.title}\n${task.instructions}`.slice(0, 1500),
+          scopes: run.createdByUserId
+            ? ["PERSONAL", "WORKSPACE", "AGENT"]
+            : ["WORKSPACE", "AGENT"],
+          agentIds: [worker.descriptor.id],
+          channel: "swarm",
+        });
+        workerMemoryContext = memBundle.contextBlock;
+      } catch {
+        workerMemoryContext = "";
+      }
+
       const messages: ProviderChatMessage[] = SwarmContextBuilder.buildWorkerMessages({
         agentName: worker.descriptor.name,
         roleTitle: worker.descriptor.roleTitle,
@@ -1319,6 +1342,7 @@ export class SwarmExecutionRuntime {
         taskInstructions: task.instructions,
         upstreamResults,
         availableToolDescriptions: toolDescriptions,
+        memoryContext: workerMemoryContext || undefined,
       });
 
       const priorData = task.outputData as Record<string, unknown> | null;

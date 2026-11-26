@@ -23,6 +23,7 @@
   "dependencies": {
     "@messiah/db": "workspace:*",
     "@messiah/mcp": "workspace:*",
+    "@messiah/memory": "workspace:*",
     "@messiah/providers": "workspace:*",
     "@messiah/shared": "workspace:*"
   },

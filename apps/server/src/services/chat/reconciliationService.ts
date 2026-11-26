@@ -82,9 +82,42 @@ export class ReconciliationService {
         });
       }
 
-      if (updatedRuns.count > 0 || updatedMessages.count > 0 || updatedSwarms.count > 0) {
+      // 4. Reconcile orphaned WorkflowRuns & active node executions left running across restart
+      const updatedWorkflows = await prisma.workflowRun.updateMany({
+        where: {
+          status: { in: ["PENDING", "RUNNING"] },
+          updatedAt: { lte: staleDate },
+        },
+        data: {
+          status: "FAILED",
+          safeErrorCode: "SERVER_RESTARTED_DURING_EXECUTION",
+          errorMessage: "Worker or server restarted while workflow automation run was active.",
+          completedAt: now,
+        },
+      });
+
+      if (updatedWorkflows.count > 0) {
+        await prisma.workflowNodeExecution.updateMany({
+          where: {
+            status: { in: ["QUEUED", "RUNNING"] },
+            updatedAt: { lte: staleDate },
+          },
+          data: {
+            status: "UNKNOWN_OUTCOME",
+            errorCode: "SERVER_RESTARTED_DURING_EXECUTION",
+            completedAt: now,
+          },
+        });
+      }
+
+      if (
+        updatedRuns.count > 0 ||
+        updatedMessages.count > 0 ||
+        updatedSwarms.count > 0 ||
+        updatedWorkflows.count > 0
+      ) {
         console.warn(
-          `[ReconciliationService] Reconciled ${updatedRuns.count} orphaned generation runs, ${updatedMessages.count} messages, and ${updatedSwarms.count} swarm runs after restart.`
+          `[ReconciliationService] Reconciled ${updatedRuns.count} orphaned generation runs, ${updatedMessages.count} messages, ${updatedSwarms.count} swarm runs, and ${updatedWorkflows.count} workflow runs after restart.`
         );
       }
 

@@ -214,18 +214,15 @@ gantt
 
 ---
 
-### Phase 6: Vector Memory & Workflow Automation
+### Phase 6: Vector Memory & Workflow Automation (COMPLETE)
 
-- **Primary Goal**: Deploy semantic long-term memory using PostgreSQL `pgvector`, build the visual workflow DAG engine, and support event triggers and cron automations.
+- **Primary Goal**: Introduce persistent pgvector-backed Long-Term AI Memory (Personal, Workspace, and Agent scopes) integrated into Chat and Swarms, alongside a Visual Workflow Automation Studio powered by a durable DAG execution runtime, PostgreSQL cron scheduler, and internal domain event triggers.
 - **Key Deliverables**:
-  - **Vector Memory**: Ingestion pipeline computing embeddings, storing in `pgvector` with HNSW indexing, and querying via cosine similarity.
-  - **Memory Scopes**: Workspace shared knowledge base vs agent-specific episodic memory.
-  - **Visual Workflow Builder**: Node-based DAG interface for composing automated pipelines.
-  - **Triggers**: Scheduled cron jobs, external webhooks (GitHub, Slack), and manual dispatch.
-- **Automated Verification**:
-  - HNSW query performance benchmark: < 20ms similarity retrieval across 100,000 vectors.
-  - DAG execution test verifying topological sorting and parallel branch execution.
-- **Exit Criteria**: Agents recall relevant context from prior conversations, and an automated workflow triggers successfully on a webhook event.
+  - **PostgreSQL `pgvector` & Database Migration `9_vector_memory_and_workflows`**: Enabled `pgvector` extension, added dimension-partitioned HNSW cosine indexes (`1536d`, `768d`), GIN full-text fallback index, memory scoping/versioning/settings models (`Memory`, `MemoryEmbedding`, `MemoryVersion`, `MemoryCollection`, `MemoryAccessPolicy`, `MemorySettings`), and durable workflow models (`WorkflowDefinition`, `WorkflowVersion`, `WorkflowSchedule`, `WorkflowEventTrigger`, `WorkflowRun`, `WorkflowNodeExecution`, `WorkflowApproval`, `WorkflowRunEvent`, `WorkflowEventDispatchLog`).
+  - **Provider Embeddings & Hybrid Memory Engine (`@messiah/providers`, `@messiah/memory`)**: OpenAI & Gemini batch embeddings + retry/dimension migration (`reembedWorkspaceMemories`), secret exclusion (`MEMORY_SECRET_REJECTED`) and scrubbed auto-capture, SQL-level access enforcement before ranking, lexical fallback, revision versioning, and prompt injection across Chat (`executionEngine` / `apps/worker`) and Phase 5 Swarms (`@messiah/agents`).
+  - **Visual Workflow DAG Engine & Scheduler (`@messiah/workflows`)**: 13 node types across triggers (`manual_trigger`, `schedule_trigger`, `event_trigger`), agents (`run_agent`, `run_swarm`), integrations (`mcp_tool`, `bridge_capability`), control (`condition`, `approval_gate`, `transform`, `merge`), and outputs (`store_result`, `completion`), using safe AST condition/template evaluation (zero `eval`), cycle detection, durable PostgreSQL cron scheduling, and self-trigger-guarded domain event routing integrated with BullMQ & Outbox.
+  - **REST APIs, WebSocket & Obsidian UI (`apps/server`, `apps/worker`, `apps/web`)**: `/api/v1/memories*` and `/api/v1/workflows*` endpoints, `workflow.subscribe` live updates, Long-Term Memory Manager (`/memory`), starter templates & Visual Workflow Studio (`/workflows`, `/workflows/[workflowId]`, `/workflows/runs/[runId]`), and "Remember" action inside `ChatWorkspace`.
+- **Status**: Completed.
 
 ---
 

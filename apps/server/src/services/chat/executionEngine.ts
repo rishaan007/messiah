@@ -1,10 +1,39 @@
 import { prisma } from "@messiah/db";
 import { defaultProviderRegistry } from "@messiah/providers";
+import { MemoryService } from "@messiah/memory";
+import { VaultService } from "../vaultService.js";
 import { streamPublisher } from "./streamPublisher.js";
 import { cancellationService } from "./cancellationService.js";
 import { providerConnectionService } from "../providerConnectionService.js";
 import { ContextBuilder } from "./contextBuilder.js";
 import type { GenerationJobPayload } from "./chatQueue.js";
+import { workflowEventRouter } from "../workflows/workflowEventRouter.js";
+
+let chatMemoryVaultInstance: VaultService | null = null;
+function getChatMemoryVault(): VaultService {
+  if (!chatMemoryVaultInstance) {
+    chatMemoryVaultInstance = new VaultService();
+  }
+  return chatMemoryVaultInstance;
+}
+
+const chatMemoryService = new MemoryService({
+  decryptProviderSecret: (input) =>
+    getChatMemoryVault().decrypt(
+      {
+        ciphertext: input.ciphertext,
+        initializationVector: input.initializationVector,
+        authenticationTag: input.authenticationTag,
+        keyVersion: input.keyVersion,
+      },
+      {
+        workspaceId: input.workspaceId,
+        providerConnectionId: input.providerConnectionId,
+        provider: input.provider,
+        keyVersion: input.keyVersion,
+      }
+    ),
+});
 
 /**
  * Core generation execution engine.
@@ -90,11 +119,29 @@ export class GenerationExecutionEngine {
         orderBy: { sequence: "asc" },
       });
 
-      const { messages: formattedHistory, systemPrompt: builtSystemPrompt } = ContextBuilder.buildHistory(
+      const { messages: formattedHistory, systemPrompt: builtSystemPromptRaw } = ContextBuilder.buildHistory(
         priorMessages,
         content,
         { systemPrompt }
       );
+
+      let builtSystemPrompt = builtSystemPromptRaw;
+      try {
+        const memBundle = await chatMemoryService.buildPromptMemoryBlock({
+          workspaceId,
+          userId: jobPayload.userId,
+          query: content,
+          scopes: ["PERSONAL", "WORKSPACE"],
+          channel: "chat",
+        });
+        if (memBundle.contextBlock) {
+          builtSystemPrompt = builtSystemPrompt
+            ? `${builtSystemPrompt}\n\n${memBundle.contextBlock}`
+            : memBundle.contextBlock;
+        }
+      } catch {
+        // Memory lookup failure must not block chat generation
+      }
 
       // 6. Get adapter from registry
       const adapter = defaultProviderRegistry.getAdapter(provider);
@@ -247,6 +294,50 @@ export class GenerationExecutionEngine {
           },
         },
       });
+
+      // Emit internal chat.completed event & optional scrubbed memory auto-capture
+      workflowEventRouter
+        .emitDomainEvent({
+          workspaceId,
+          eventType: "chat.completed",
+          dedupKey: `chat-run-${runId}`,
+          triggeredByUserId: jobPayload.userId,
+          payload: {
+            runId,
+            threadId,
+            modelId,
+            summary: accumulatedContent.slice(0, 1200),
+          },
+        })
+        .catch(() => {});
+
+      chatMemoryService
+        .getOrCreateSettingsInternal(workspaceId)
+        .then(async (settings) => {
+          if (!settings.enableAutoCapture || accumulatedContent.trim().length < 40) return;
+          await chatMemoryService.createMemory(
+            jobPayload.userId,
+            {
+              workspaceId,
+              scope: "PERSONAL",
+              sourceType: "CONVERSATION_SUMMARY",
+              sourceThreadId: threadId,
+              sourceMessageId: assistantMessageId,
+              title: `Chat Note: ${content.trim().slice(0, 80)}`,
+              content: `Prompt: ${content.trim().slice(0, 600)}\n\nResponse Summary: ${accumulatedContent.trim().slice(0, 1600)}`,
+              tags: ["auto-capture", "chat"],
+              importance: 0.45,
+              isPinned: false,
+              embedImmediately: true,
+              metadata: { runId, modelId },
+            },
+            {
+              bypassMembershipCheck: true,
+              redactInsteadOfReject: true,
+            }
+          );
+        })
+        .catch(() => {});
     } catch (err: unknown) {
       console.error(`[ExecutionEngine] Generation failed for run ${runId}:`, err);
       const safeErrorCode = err instanceof Error ? err.name : "UNKNOWN_ERROR";

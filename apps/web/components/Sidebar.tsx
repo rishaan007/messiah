@@ -13,6 +13,7 @@ import {
   HelpCircle,
   Key,
   MessageSquare,
+  Database,
 } from "lucide-react";
 import { cn } from "@messiah/ui";
 
@@ -28,10 +29,11 @@ const navItems = [
   { id: "chat", label: "Universal Chat", icon: MessageSquare, href: "/chat", badge: "Live" },
   { id: "agents", label: "Agent Registry", icon: Bot, href: "/agents", badge: "Phase 5" },
   { id: "swarms", label: "Swarm Topology", icon: GitFork, href: "/swarms", badge: "3D" },
+  { id: "memory", label: "Vector Memory", icon: Database, href: "/memory", badge: "Phase 6" },
   { id: "integrations", label: "AI Integrations", icon: Key, href: "/settings/integrations", badge: "Phase 2A" },
   { id: "devices", label: "Local Bridges", icon: Laptop2, href: "/settings/devices", badge: "Phase 4B" },
   { id: "mcp", label: "MCP Tools", icon: Cpu, href: "/settings/mcp", badge: "Phase 3A" },
-  { id: "workflows", label: "Workflows", icon: GitFork, badge: "Phase 6" },
+  { id: "workflows", label: "Workflows", icon: GitFork, href: "/workflows", badge: "Phase 6" },
   { id: "audit", label: "Audit Logs", icon: FileText },
   { id: "settings", label: "Settings", icon: Sliders, href: "/settings/integrations" },
 ];

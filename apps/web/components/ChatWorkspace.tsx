@@ -21,6 +21,7 @@ import {
   RefreshCw,
   ShieldAlert,
   Laptop2,
+  Database,
 } from "lucide-react";
 import { Button, cn } from "@messiah/ui";
 import { Header } from "@/components/Header";
@@ -114,6 +115,35 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
   const wsUrl = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:3001/api/v1/realtime";
+
+  const [savedMemoryMsgIds, setSavedMemoryMsgIds] = useState<Set<string>>(new Set());
+
+  const handleSaveMessageToMemory = async (msg: MessageInfo) => {
+    if (!authToken || !activeWorkspace || !msg.content?.trim()) return;
+    try {
+      const res = await fetch(`${apiUrl}/api/v1/memories`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          workspaceId: activeWorkspace.id,
+          scope: "PERSONAL",
+          sourceType: "CONVERSATION_SUMMARY",
+          sourceThreadId: currentThreadId || undefined,
+          sourceMessageId: msg.id,
+          title: `Saved Chat Insight (${msg.modelId || selectedModelId || "Messiah"})`,
+          content: msg.content.slice(0, 12000),
+          tags: ["chat", "saved"],
+          importance: 0.7,
+        }),
+      });
+      if (res.ok) {
+        setSavedMemoryMsgIds((prev) => new Set(prev).add(msg.id));
+      }
+    } catch {}
+  };
 
   // Auto-scroll to bottom
   const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
@@ -1292,6 +1322,20 @@ export function ChatWorkspace({ initialThreadId }: ChatWorkspaceProps) {
                                   tc.generationRunId === activeRun.id)
                             )}
                           />
+                        )}
+
+                        {!isUser && message.status === "COMPLETED" && displayContent.trim().length > 0 && (
+                          <div className="mt-2 pt-2 border-t border-[#1E2536]/60 flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleSaveMessageToMemory(message)}
+                              className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] text-[#8E9BB4] hover:bg-[#1E2536] hover:text-[#00F0FF] transition-colors"
+                              title="Save insight to Long-Term Vector Memory"
+                            >
+                              <Database className="w-3 h-3" />
+                              {savedMemoryMsgIds.has(message.id) ? "Saved to Memory" : "Remember"}
+                            </button>
+                          </div>
                         )}
                       </div>
 

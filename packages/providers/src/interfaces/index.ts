@@ -60,6 +60,21 @@ export type ProviderStreamEvent =
   | { type: "usage"; inputTokens: number; outputTokens: number; cachedInputTokens?: number }
   | { type: "completed"; responseId?: string; finishReason?: string };
 
+export interface ProviderEmbedRequest {
+  model?: string;
+  texts: string[];
+  dimensions?: number;
+  credentials: ProviderCredentials;
+}
+
+export interface ProviderEmbedResponse {
+  provider: SupportedProviderId;
+  model: string;
+  dimensions: number;
+  embeddings: number[][];
+  totalTokens: number;
+}
+
 export interface IProviderAdapter {
   readonly id: SupportedProviderId;
   readonly metadata: ProviderMetadataInfo;
@@ -74,6 +89,11 @@ export interface IProviderAdapter {
     request: ProviderStreamRequest,
     abortSignal?: AbortSignal
   ): AsyncIterable<ProviderStreamEvent>;
+
+  embedTexts?(
+    request: ProviderEmbedRequest,
+    abortSignal?: AbortSignal
+  ): Promise<ProviderEmbedResponse>;
 
   getCapabilities(): ProviderCapabilityMap;
 

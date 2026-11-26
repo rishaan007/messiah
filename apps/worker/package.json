@@ -15,8 +15,10 @@
     "@messiah/agents": "workspace:*",
     "@messiah/db": "workspace:*",
     "@messiah/mcp": "workspace:*",
+    "@messiah/memory": "workspace:*",
     "@messiah/providers": "workspace:*",
     "@messiah/shared": "workspace:*",
+    "@messiah/workflows": "workspace:*",
     "bullmq": "^6.7.8",
     "dotenv": "^16.4.7",
     "ioredis": "^5.5.0"

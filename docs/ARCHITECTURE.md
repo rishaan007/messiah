@@ -657,4 +657,21 @@ Phase 5 introduces Supervisor–Worker multi-agent orchestration inside `@messia
 
 ---
 
+## 18. Vector Memory & Workflow Automation Architecture (Phase 6)
+
+Phase 6 extends Messiah with persistent long-term semantic memory (`pgvector`) and a durable DAG workflow automation engine integrated seamlessly across the existing chat, swarm, MCP, Bridge, BullMQ, and Outbox runtime:
+
+1. **Vector Memory Engine (`@messiah/memory` + `@messiah/providers`)**:
+   - Supports OpenAI (`text-embedding-3-small` / `text-embedding-3-large`) and Google Gemini (`gemini-embedding-001` / `text-embedding-004`) embeddings alongside automatic PostgreSQL GIN full-text lexical fallback when embedding credentials are offline.
+   - Organizes records across three strict scopes (**Personal**, **Workspace**, **Agent**) with SQL-level authorization filtering applied prior to pgvector cosine ranking, secret detection/scrubbing (`MemorySanitizer`), and immutable `MemoryVersion` revision tracking.
+   - Injects retrieved context framed inside `<UNTRUSTED_MEMORY_CONTEXT trusted="false">` into both Chat (`GenerationExecutionEngine`, `ChatGenerationWorker`) and Swarm workers (`SwarmExecutionRuntime`).
+2. **Visual Workflow DAG Engine & Durable Triggers (`@messiah/workflows`)**:
+   - Validates and compiles acyclic 13-node DAGs (`manual_trigger`, `schedule_trigger`, `event_trigger`, `run_agent`, `run_swarm`, `mcp_tool`, `bridge_capability`, `condition`, `approval_gate`, `transform`, `merge`, `store_result`, `completion`) into immutable `WorkflowVersion` snapshots.
+   - Executes on the unified `CHAT_GENERATION_QUEUE_NAME = "messiah-chat-generation"` BullMQ queue and Transactional Outbox (`workflow.dispatch`, `workflow.resume`), coordinated with PostgreSQL cron scheduling (`WorkflowSchedulerEngine` with IANA timezones, misfire policies, and optimistic CAS claims) and internal domain event routing (`WorkflowEventRouter`).
+3. **Obsidian Studio & Memory UI (`apps/web`)**:
+   - Vector Memory Manager at `/memory` (scopes, collections, hybrid retrieval preview, version inspector, embedding & retention settings) plus inline Chat "Remember" actions.
+   - Visual Workflow Studio at `/workflows` and `/workflows/[workflowId]` (node palette, draggable SVG/HTML node-edge canvas, property inspector, live DAG validation) and live run viewer at `/workflows/runs/[runId]`.
+
+---
+
 _End of Document: Messiah System Architecture Specification._

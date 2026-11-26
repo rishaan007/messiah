@@ -2,6 +2,8 @@ import { Worker, type ConnectionOptions, type Job } from "bullmq";
 import { Redis } from "ioredis";
 import { prisma } from "@messiah/db";
 import { SwarmExecutionRuntime, type SwarmJobPayload } from "@messiah/agents";
+import { WorkflowExecutionRuntime, type WorkflowJobPayload } from "@messiah/workflows";
+import { MemoryService } from "@messiah/memory";
 import { defaultProviderRegistry, type ProviderChatMessage } from "@messiah/providers";
 import type { MessiahStreamEvent, SupportedProviderId, WorkspaceRole } from "@messiah/shared";
 import {
@@ -119,9 +121,53 @@ export class ChatGenerationWorker {
       },
     });
 
+    const workflowRuntime = new WorkflowExecutionRuntime({
+      decryptProviderSecret: (input) =>
+        VaultService.decrypt(
+          input.ciphertext,
+          input.initializationVector,
+          input.authenticationTag,
+          input.providerConnectionId,
+          input.workspaceId,
+          input.keyVersion
+        ),
+      decryptMcpSecret: (encryptedValue, context) => {
+        const parsed = JSON.parse(encryptedValue) as {
+          ciphertext: string;
+          initializationVector?: string;
+          authenticationTag?: string;
+          iv?: string;
+          tag?: string;
+        };
+        return VaultService.decrypt(
+          parsed.ciphertext,
+          parsed.initializationVector || parsed.iv || "",
+          parsed.authenticationTag || parsed.tag || "",
+          context.connectionId,
+          context.workspaceId,
+          context.keyVersion
+        );
+      },
+      publishEvent: async (event) => {
+        if (!this.redisPublisher) return;
+        await this.redisPublisher
+          .publish(`messiah:workflows:${event.runId}:events`, JSON.stringify(event))
+          .catch(() => {});
+      },
+      isCancellationRequested: async (runId) => {
+        const signal = this.cancellationSub.register(runId);
+        return signal.aborted;
+      },
+    });
+
     this.worker = new Worker<GenerationJobData>(
       CHAT_GENERATION_QUEUE_NAME,
       async (job: Job<GenerationJobData>) => {
+        const maybeWorkflow = job.data as unknown as WorkflowJobPayload;
+        if (job.name === "workflow.execute" || maybeWorkflow?.kind === "workflow.execute") {
+          await workflowRuntime.processJob(maybeWorkflow);
+          return;
+        }
         const maybeSwarm = job.data as unknown as SwarmJobPayload;
         if (job.name === "swarm.execute" || maybeSwarm?.kind === "swarm.execute") {
           await swarmRuntime.processJob(maybeSwarm);
@@ -402,6 +448,35 @@ export class ChatGenerationWorker {
       }
 
       // 9. Multi-turn Controlled Agent Loop
+      let effectiveSystemPrompt = systemPrompt;
+      try {
+        const workerMemory = new MemoryService({
+          decryptProviderSecret: (input) =>
+            VaultService.decrypt(
+              input.ciphertext,
+              input.initializationVector,
+              input.authenticationTag,
+              input.providerConnectionId,
+              input.workspaceId,
+              input.keyVersion
+            ),
+        });
+        const memBundle = await workerMemory.buildPromptMemoryBlock({
+          workspaceId: data.workspaceId,
+          userId: data.userId,
+          query: content,
+          scopes: ["PERSONAL", "WORKSPACE"],
+          channel: "chat",
+        });
+        if (memBundle.contextBlock) {
+          effectiveSystemPrompt = effectiveSystemPrompt
+            ? `${effectiveSystemPrompt}\n\n${memBundle.contextBlock}`
+            : memBundle.contextBlock;
+        }
+      } catch {
+        // Non-blocking fallback when embeddings or memory unavailable
+      }
+
       const adapter = defaultProviderRegistry.getAdapter(run.provider as SupportedProviderId);
       let round = 0;
       let executedToolCallsCount = reloadedToolCalls.filter((t) => t.completedAt !== null).length;
@@ -434,7 +509,7 @@ export class ChatGenerationWorker {
             temperature,
             maxTokens,
             credentials: { apiKey },
-            systemPrompt,
+            systemPrompt: effectiveSystemPrompt,
             tools: definitions.length > 0 ? definitions : undefined,
           },
           abortSignal

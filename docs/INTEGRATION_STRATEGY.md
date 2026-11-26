@@ -504,4 +504,12 @@ Messiah targets the **2026-07-28 MCP Specification** using the official TypeScri
 
 ---
 
+## 9. Embedding Providers, pgvector Memory & Durable Workflow Runtime Integration (Phase 6)
+
+- **Provider Embeddings (`@messiah/providers`)**: Extended `IProviderAdapter` and `EmbeddingService` with batch-capable vector generation (`OpenAIAdapter.embedTexts` for `text-embedding-3-small`/`text-embedding-3-large`, `GeminiAdapter.embedTexts` for `gemini-embedding-001`/`text-embedding-004`) plus transient backoff and graceful lexical fallback (`ts_rank_cd` + `ILIKE`) whenever embedding providers are offline or unconfigured.
+- **Prompt Memory Integration (`@messiah/memory`)**: Both Chat execution (`GenerationExecutionEngine` and `ChatGenerationWorker`) and Swarm workers (`SwarmExecutionRuntime`) retrieve authorized `PERSONAL`, `WORKSPACE`, and `AGENT` memories transparently prior to model invocation, with optional opted-in scrubbed auto-capture and manual "Remember" saving from `ChatWorkspace`.
+- **Unified Workflow Execution (`@messiah/workflows`)**: Workflow runs share the existing `CHAT_GENERATION_QUEUE_NAME = "messiah-chat-generation"` BullMQ queue (`workflow.execute`), Transactional Outbox (`workflow.dispatch` / `workflow.resume`), PostgreSQL cron sweeper (`WorkflowSchedulerEngine`), internal domain event bus (`WorkflowEventRouter`), `ToolApprovalService`, `DeviceTaskService`, and `/api/v1/realtime` (`workflow.subscribe` + `workflow.snapshot`).
+
+---
+
 _End of Document: Messiah Integration Strategy & Connector Specification._

@@ -22,8 +22,11 @@ import { toolApprovalRoutes } from "./routes/api/v1/toolApprovals.js";
 import { deviceRoutes } from "./routes/api/v1/devices.js";
 import { agentRoutes } from "./routes/api/v1/agents.js";
 import { swarmRoutes } from "./routes/api/v1/swarms.js";
+import { memoryRoutes } from "./routes/api/v1/memories.js";
+import { workflowRoutes } from "./routes/api/v1/workflows.js";
 import { streamPublisher, ticketService, cancellationService, chatQueueManager, chatWorkerManager, ReconciliationService } from "./services/chat/index.js";
 import { swarmStreamPublisher } from "./services/agents/index.js";
+import { workflowStreamPublisher, workflowSchedulerService } from "./services/workflows/index.js";
 import { devicePresenceService } from "./services/devices/index.js";
 import { createLogger } from "./utils/logger.js";
 
@@ -72,6 +75,7 @@ export async function buildApp(opts: BuildAppOptions) {
   // Wire services with Redis
   streamPublisher.setRedis(app.redis);
   swarmStreamPublisher.setRedis(app.redis);
+  workflowStreamPublisher.setRedis(app.redis);
   ticketService.setRedis(app.redis);
   cancellationService.setRedis(app.redis);
   devicePresenceService.setRedis(app.redis);
@@ -81,11 +85,15 @@ export async function buildApp(opts: BuildAppOptions) {
     if (opts.env.NODE_ENV === "test" || process.env.ENABLE_EMBEDDED_WORKER === "true") {
       chatWorkerManager.start(opts.env.REDIS_URL);
     }
+    if (opts.env.NODE_ENV !== "test") {
+      workflowSchedulerService.startPeriodicSweep(15_000);
+    }
   }
 
   // Gracefully close BullMQ worker and queue connections on app close
   app.addHook("onClose", async () => {
     app.server.closeAllConnections?.();
+    workflowSchedulerService.stop();
     await chatWorkerManager.close();
     await chatQueueManager.close();
   });
@@ -157,6 +165,8 @@ export async function buildApp(opts: BuildAppOptions) {
   await app.register(deviceRoutes, { prefix: "/api/v1" });
   await app.register(agentRoutes, { prefix: "/api/v1" });
   await app.register(swarmRoutes, { prefix: "/api/v1" });
+  await app.register(memoryRoutes, { prefix: "/api/v1" });
+  await app.register(workflowRoutes, { prefix: "/api/v1" });
 
   return app;
 }

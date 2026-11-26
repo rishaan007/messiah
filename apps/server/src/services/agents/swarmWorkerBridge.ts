@@ -5,6 +5,7 @@ import { streamPublisher } from "../chat/streamPublisher.js";
 import { cancellationService } from "../chat/cancellationService.js";
 import { deviceTaskService } from "../devices/deviceTaskService.js";
 import { swarmStreamPublisher } from "./swarmStreamPublisher.js";
+import { workflowEventRouter } from "../workflows/workflowEventRouter.js";
 
 const vaultService = new VaultService();
 
@@ -40,6 +41,26 @@ export function createServerSwarmRuntime(): SwarmExecutionRuntime {
     },
     publishEvent: async (event) => {
       await swarmStreamPublisher.publish(event);
+      if (
+        event.type === "swarm.run.completed" ||
+        event.type === "swarm.run.partial_completed" ||
+        event.type === "swarm.run.failed"
+      ) {
+        const domainType = event.type === "swarm.run.failed" ? "swarm.failed" : "swarm.completed";
+        workflowEventRouter
+          .emitDomainEvent({
+            workspaceId: event.workspaceId,
+            eventType: domainType,
+            dedupKey: `swarm-${event.runId}-${domainType}`,
+            payload: {
+              runId: event.runId,
+              threadId: event.threadId || null,
+              summary: String((event.payload as Record<string, unknown>)?.finalSummary || ""),
+              status: event.type,
+            },
+          })
+          .catch(() => {});
+      }
     },
     publishThreadMessageUpdate: async ({ threadId, assistantMessageId, runId, status, content }) => {
       await prisma.message

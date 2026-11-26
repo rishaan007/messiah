@@ -67,6 +67,15 @@ model User {
   createdAgents              AgentDefinition[]      @relation("CreatedAgentDefinitions")
   createdAgentVersions       AgentConfigurationVersion[] @relation("CreatedAgentVersions")
   createdAgentRuns           AgentRun[]             @relation("CreatedAgentRuns")
+  personalMemories           Memory[]               @relation("PersonalMemoryOwner")
+  createdMemories            Memory[]               @relation("CreatedMemories")
+  createdMemoryCollections   MemoryCollection[]     @relation("CreatedMemoryCollections")
+  editedMemoryVersions       MemoryVersion[]        @relation("EditedMemoryVersions")
+  createdWorkflows           WorkflowDefinition[]   @relation("CreatedWorkflows")
+  publishedWorkflowVersions  WorkflowVersion[]      @relation("PublishedWorkflowVersions")
+  triggeredWorkflowRuns      WorkflowRun[]          @relation("TriggeredWorkflowRuns")
+  requestedWorkflowApprovals WorkflowApproval[]     @relation("RequestedWorkflowApprovals")
+  decidedWorkflowApprovals   WorkflowApproval[]     @relation("DecidedWorkflowApprovals")
 
   @@index([externalProvider, externalId])
   @@map("users")
@@ -104,6 +113,21 @@ model Workspace {
   agentCommunications AgentCommunication[]
   agentArtifacts      AgentArtifact[]
   agentRunEvents      AgentRunEvent[]
+  memorySettings      MemorySettings?
+  memoryCollections   MemoryCollection[]
+  memories            Memory[]
+  memoryEmbeddings    MemoryEmbedding[]
+  memoryVersions      MemoryVersion[]
+  memoryAccessPolicies MemoryAccessPolicy[]
+  workflowDefinitions WorkflowDefinition[]
+  workflowVersions    WorkflowVersion[]
+  workflowSchedules   WorkflowSchedule[]
+  workflowEventTriggers WorkflowEventTrigger[]
+  workflowRuns        WorkflowRun[]
+  workflowNodeExecutions WorkflowNodeExecution[]
+  workflowApprovals   WorkflowApproval[]
+  workflowRunEvents   WorkflowRunEvent[]
+  workflowEventLogs   WorkflowEventDispatchLog[]
 
   @@index([ownerId])
   @@map("workspaces")
@@ -512,6 +536,8 @@ model ToolCall {
   threadId           String?             @map("thread_id") @db.Uuid
   agentRunId         String?             @map("agent_run_id") @db.Uuid
   agentTaskId        String?             @map("agent_task_id") @db.Uuid
+  workflowRunId      String?             @map("workflow_run_id") @db.Uuid
+  workflowNodeExecId String?             @map("workflow_node_exec_id") @db.Uuid
   workspaceId        String              @map("workspace_id") @db.Uuid
   toolDefinitionId   String              @map("tool_definition_id") @db.Uuid
   providerCallId     String              @map("provider_call_id") @db.VarChar(128)
@@ -545,6 +571,8 @@ model ToolCall {
   @@index([threadId])
   @@index([agentRunId])
   @@index([agentTaskId])
+  @@index([workflowRunId])
+  @@index([workflowNodeExecId])
   @@index([workspaceId, status])
   @@index([toolDefinitionId])
   @@index([connectionId])
@@ -752,6 +780,8 @@ model BridgeTask {
   generationRunId String?              @map("generation_run_id") @db.Uuid
   agentRunId      String?              @map("agent_run_id") @db.Uuid
   agentTaskId     String?              @map("agent_task_id") @db.Uuid
+  workflowRunId   String?              @map("workflow_run_id") @db.Uuid
+  workflowNodeExecId String?           @map("workflow_node_exec_id") @db.Uuid
   capability      String               @db.VarChar(64)
   resourceScopes  String[]             @default([]) @map("resource_scopes")
   parameters      Json                 @default("{}") @db.JsonB
@@ -782,6 +812,8 @@ model BridgeTask {
   @@index([threadId])
   @@index([agentRunId])
   @@index([agentTaskId])
+  @@index([workflowRunId])
+  @@index([workflowNodeExecId])
   @@index([expiresAt])
   @@map("bridge_tasks")
 }
@@ -917,6 +949,8 @@ model AgentDefinition {
   supervisedRuns            AgentRun[]                 @relation("SupervisorAgent")
   assignedTasks             AgentTask[]                @relation("AssignedAgent")
   executions                AgentExecution[]
+  memories                  Memory[]
+  memoryCollections         MemoryCollection[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, status])
@@ -1158,4 +1192,495 @@ model AgentRunEvent {
   @@index([runId, createdAt])
   @@index([workspaceId])
   @@map("agent_run_events")
+}
+
+
+// ==============================================================================
+// 12. VECTOR MEMORY SYSTEM (PHASE 6)
+// ==============================================================================
+
+enum MemoryScope {
+  PERSONAL
+  WORKSPACE
+  AGENT
+}
+
+enum MemorySourceType {
+  MANUAL
+  CONVERSATION_SUMMARY
+  PREFERENCE
+  WORKSPACE_DECISION
+  AGENT_FINDING
+  WORKFLOW_OUTPUT
+  ARTIFACT
+}
+
+enum MemorySensitivity {
+  PUBLIC_WORKSPACE
+  PERSONAL_PRIVATE
+  AGENT_RESTRICTED
+  SENSITIVE_REDACTED
+}
+
+model MemorySettings {
+  id                   String    @id @default(uuid()) @db.Uuid
+  workspaceId          String    @unique @map("workspace_id") @db.Uuid
+  embeddingProvider    String?   @map("embedding_provider") @db.VarChar(64)
+  embeddingModel       String?   @map("embedding_model") @db.VarChar(128)
+  embeddingDimensions  Int       @default(1536) @map("embedding_dimensions")
+  providerConnectionId String?   @map("provider_connection_id") @db.Uuid
+  enableAutoCapture    Boolean   @default(false) @map("enable_auto_capture")
+  enableChatInjection  Boolean   @default(true) @map("enable_chat_injection")
+  enableSwarmInjection Boolean   @default(true) @map("enable_swarm_injection")
+  defaultTopK          Int       @default(6) @map("default_top_k")
+  minSimilarityScore   Float     @default(0.2) @map("min_similarity_score")
+  retentionDays        Int?      @map("retention_days")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace            Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("memory_settings")
+}
+
+model MemoryCollection {
+  id              String               @id @default(uuid()) @db.Uuid
+  workspaceId     String               @map("workspace_id") @db.Uuid
+  scope           MemoryScope          @default(WORKSPACE)
+  ownerUserId     String?              @map("owner_user_id") @db.Uuid
+  agentId         String?              @map("agent_id") @db.Uuid
+  name            String               @db.VarChar(128)
+  slug            String               @db.VarChar(128)
+  description     String?              @db.Text
+  createdByUserId String?              @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace       Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agent           AgentDefinition?     @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  createdByUser   User?                @relation("CreatedMemoryCollections", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  memories        Memory[]
+  accessPolicies  MemoryAccessPolicy[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, scope])
+  @@index([workspaceId, ownerUserId])
+  @@map("memory_collections")
+}
+
+model Memory {
+  id                  String               @id @default(uuid()) @db.Uuid
+  workspaceId         String               @map("workspace_id") @db.Uuid
+  scope               MemoryScope
+  ownerUserId         String?              @map("owner_user_id") @db.Uuid
+  agentId             String?              @map("agent_id") @db.Uuid
+  collectionId        String?              @map("collection_id") @db.Uuid
+  sourceType          MemorySourceType     @default(MANUAL) @map("source_type")
+  sourceThreadId      String?              @map("source_thread_id") @db.Uuid
+  sourceMessageId     String?              @map("source_message_id") @db.Uuid
+  sourceAgentRunId    String?              @map("source_agent_run_id") @db.Uuid
+  sourceWorkflowRunId String?              @map("source_workflow_run_id") @db.Uuid
+  title               String               @db.VarChar(200)
+  content             String               @db.Text
+  summary             String?              @db.Text
+  contentHash         String               @map("content_hash") @db.VarChar(64)
+  tags                String[]             @default([])
+  metadata            Json                 @default("{}") @db.JsonB
+  importance          Float                @default(0.5)
+  sensitivity         MemorySensitivity    @default(PUBLIC_WORKSPACE)
+  isPinned            Boolean              @default(false) @map("is_pinned")
+  isArchived          Boolean              @default(false) @map("is_archived")
+  currentVersion      Int                  @default(1) @map("current_version")
+  accessCount         Int                  @default(0) @map("access_count")
+  lastAccessedAt      DateTime?            @map("last_accessed_at") @db.Timestamptz(6)
+  expiresAt           DateTime?            @map("expires_at") @db.Timestamptz(6)
+  createdByUserId     String?              @map("created_by_user_id") @db.Uuid
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace           Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ownerUser           User?                @relation("PersonalMemoryOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  agent               AgentDefinition?     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  collection          MemoryCollection?    @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+  createdByUser       User?                @relation("CreatedMemories", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  embedding           MemoryEmbedding?
+  versions            MemoryVersion[]
+  accessPolicies      MemoryAccessPolicy[]
+
+  @@index([workspaceId, scope, ownerUserId, isArchived])
+  @@index([workspaceId, scope, agentId, isArchived])
+  @@index([workspaceId, contentHash])
+  @@index([collectionId])
+  @@index([expiresAt])
+  @@map("memories")
+}
+
+model MemoryEmbedding {
+  id                  String                       @id @default(uuid()) @db.Uuid
+  memoryId            String                       @unique @map("memory_id") @db.Uuid
+  workspaceId         String                       @map("workspace_id") @db.Uuid
+  embeddingModel      String                       @map("embedding_model") @db.VarChar(128)
+  embeddingProvider   String                       @map("embedding_provider") @db.VarChar(64)
+  embeddingDimensions Int                          @map("embedding_dimensions")
+  embedding           Unsupported("vector")?
+  contentHash         String                       @map("content_hash") @db.VarChar(64)
+  status              String                       @default("READY") @db.VarChar(32)
+  lastError           String?                      @map("last_error") @db.Text
+  createdAt           DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  memory              Memory                       @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+  workspace           Workspace                    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, embeddingModel, embeddingDimensions])
+  @@index([workspaceId, status])
+  @@map("memory_embeddings")
+}
+
+model MemoryVersion {
+  id             String    @id @default(uuid()) @db.Uuid
+  memoryId       String    @map("memory_id") @db.Uuid
+  workspaceId    String    @map("workspace_id") @db.Uuid
+  versionNumber  Int       @map("version_number")
+  title          String    @db.VarChar(200)
+  content        String    @db.Text
+  contentHash    String    @map("content_hash") @db.VarChar(64)
+  changeReason   String?   @map("change_reason") @db.VarChar(255)
+  editedByUserId String?   @map("edited_by_user_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  memory         Memory    @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+  workspace      Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  editedByUser   User?     @relation("EditedMemoryVersions", fields: [editedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([memoryId, versionNumber])
+  @@index([workspaceId, memoryId])
+  @@map("memory_versions")
+}
+
+model MemoryAccessPolicy {
+  id            String            @id @default(uuid()) @db.Uuid
+  workspaceId   String            @map("workspace_id") @db.Uuid
+  memoryId      String?           @map("memory_id") @db.Uuid
+  collectionId  String?           @map("collection_id") @db.Uuid
+  principalType String            @map("principal_type") @db.VarChar(32)
+  principalId   String            @map("principal_id") @db.VarChar(128)
+  canRead       Boolean           @default(true) @map("can_read")
+  canWrite      Boolean           @default(false) @map("can_write")
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  memory        Memory?           @relation(fields: [memoryId], references: [id], onDelete: Cascade)
+  collection    MemoryCollection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, memoryId])
+  @@index([workspaceId, collectionId])
+  @@index([workspaceId, principalType, principalId])
+  @@map("memory_access_policies")
+}
+
+// ==============================================================================
+// 13. VISUAL WORKFLOW AUTOMATION SYSTEM (PHASE 6)
+// ==============================================================================
+
+enum WorkflowStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum WorkflowTriggerType {
+  MANUAL
+  SCHEDULE
+  EVENT
+}
+
+enum WorkflowMisfirePolicy {
+  SKIP
+  FIRE_ONCE
+  CATCH_UP_BOUNDED
+}
+
+enum WorkflowConcurrencyPolicy {
+  SKIP_IF_RUNNING
+  ALLOW_CONCURRENT
+  REPLACE_QUEUED
+}
+
+enum WorkflowRunStatus {
+  PENDING
+  RUNNING
+  AWAITING_APPROVAL
+  COMPLETED
+  PARTIAL_COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum WorkflowNodeStatus {
+  PENDING
+  QUEUED
+  RUNNING
+  AWAITING_APPROVAL
+  COMPLETED
+  FAILED
+  SKIPPED
+  CANCELLED
+  UNKNOWN_OUTCOME
+}
+
+model WorkflowDefinition {
+  id                  String                  @id @default(uuid()) @db.Uuid
+  workspaceId         String                  @map("workspace_id") @db.Uuid
+  name                String                  @db.VarChar(128)
+  slug                String                  @db.VarChar(128)
+  description         String?                 @db.Text
+  category            String                  @default("automation") @db.VarChar(64)
+  status              WorkflowStatus          @default(DRAFT)
+  activeVersionNumber Int?                    @map("active_version_number")
+  draftGraph          Json                    @map("draft_graph") @db.JsonB
+  defaultInputSchema  Json?                   @map("default_input_schema") @db.JsonB
+  isTemplate          Boolean                 @default(false) @map("is_template")
+  createdByUserId     String?                 @map("created_by_user_id") @db.Uuid
+  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace           Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdByUser       User?                   @relation("CreatedWorkflows", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  versions            WorkflowVersion[]
+  schedule            WorkflowSchedule?
+  eventTriggers       WorkflowEventTrigger[]
+  runs                WorkflowRun[]
+  nodeExecutions      WorkflowNodeExecution[]
+  approvals           WorkflowApproval[]
+
+  @@unique([workspaceId, slug])
+  @@index([workspaceId, status])
+  @@map("workflow_definitions")
+}
+
+model WorkflowVersion {
+  id                String             @id @default(uuid()) @db.Uuid
+  workflowId        String             @map("workflow_id") @db.Uuid
+  workspaceId       String             @map("workspace_id") @db.Uuid
+  versionNumber     Int                @map("version_number")
+  definitionJson    Json               @map("definition_json") @db.JsonB
+  graphHash         String             @map("graph_hash") @db.VarChar(64)
+  publishedByUserId String?            @map("published_by_user_id") @db.Uuid
+  publishedAt       DateTime           @default(now()) @map("published_at") @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  workflow          WorkflowDefinition @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  publishedByUser   User?              @relation("PublishedWorkflowVersions", fields: [publishedByUserId], references: [id], onDelete: SetNull)
+  runs              WorkflowRun[]
+
+  @@unique([workflowId, versionNumber])
+  @@index([workspaceId, workflowId])
+  @@map("workflow_versions")
+}
+
+model WorkflowSchedule {
+  id                  String                    @id @default(uuid()) @db.Uuid
+  workflowId          String                    @unique @map("workflow_id") @db.Uuid
+  workspaceId         String                    @map("workspace_id") @db.Uuid
+  versionId           String?                   @map("version_id") @db.Uuid
+  cronExpression      String                    @map("cron_expression") @db.VarChar(128)
+  timezone            String                    @default("UTC") @db.VarChar(64)
+  enabled             Boolean                   @default(true)
+  misfirePolicy       WorkflowMisfirePolicy     @default(FIRE_ONCE) @map("misfire_policy")
+  concurrencyPolicy   WorkflowConcurrencyPolicy @default(SKIP_IF_RUNNING) @map("concurrency_policy")
+  staticInput         Json                      @default("{}") @map("static_input") @db.JsonB
+  lastTriggeredAt     DateTime?                 @map("last_triggered_at") @db.Timestamptz(6)
+  nextRunAt           DateTime?                 @map("next_run_at") @db.Timestamptz(6)
+  consecutiveFailures Int                       @default(0) @map("consecutive_failures")
+  lastError           String?                   @map("last_error") @db.Text
+  createdAt           DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workflow            WorkflowDefinition        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workspace           Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([enabled, nextRunAt])
+  @@index([workspaceId])
+  @@map("workflow_schedules")
+}
+
+model WorkflowEventTrigger {
+  id              String                     @id @default(uuid()) @db.Uuid
+  workflowId      String                     @map("workflow_id") @db.Uuid
+  workspaceId     String                     @map("workspace_id") @db.Uuid
+  versionId       String?                    @map("version_id") @db.Uuid
+  eventType       String                     @map("event_type") @db.VarChar(96)
+  filterRules     Json                       @default("{}") @map("filter_rules") @db.JsonB
+  cooldownSeconds Int                        @default(5) @map("cooldown_seconds")
+  enabled         Boolean                    @default(true)
+  lastTriggeredAt DateTime?                  @map("last_triggered_at") @db.Timestamptz(6)
+  createdAt       DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                   @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workflow        WorkflowDefinition         @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workspace       Workspace                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  dispatchLogs    WorkflowEventDispatchLog[]
+
+  @@unique([workflowId, eventType])
+  @@index([workspaceId, eventType, enabled])
+  @@map("workflow_event_triggers")
+}
+
+model WorkflowRun {
+  id                      String                  @id @default(uuid()) @db.Uuid
+  workflowId              String                  @map("workflow_id") @db.Uuid
+  versionId               String                  @map("version_id") @db.Uuid
+  workspaceId             String                  @map("workspace_id") @db.Uuid
+  triggeredByUserId       String?                 @map("triggered_by_user_id") @db.Uuid
+  triggerType             WorkflowTriggerType     @map("trigger_type")
+  triggerEventId          String?                 @map("trigger_event_id") @db.VarChar(128)
+  correlationId           String?                 @map("correlation_id") @db.VarChar(128)
+  sourceWorkflowId        String?                 @map("source_workflow_id") @db.Uuid
+  recursionDepth          Int                     @default(0) @map("recursion_depth")
+  status                  WorkflowRunStatus       @default(PENDING)
+  triggerPayload          Json                    @default("{}") @map("trigger_payload") @db.JsonB
+  finalOutput             Json?                   @map("final_output") @db.JsonB
+  finalSummary            String?                 @map("final_summary") @db.Text
+  safeErrorCode           String?                 @map("safe_error_code") @db.VarChar(64)
+  errorMessage            String?                 @map("error_message") @db.Text
+  cancellationRequestedAt DateTime?               @map("cancellation_requested_at") @db.Timestamptz(6)
+  startedAt               DateTime?               @map("started_at") @db.Timestamptz(6)
+  completedAt             DateTime?               @map("completed_at") @db.Timestamptz(6)
+  createdAt               DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime                @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  workflow                WorkflowDefinition      @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  version                 WorkflowVersion         @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  workspace               Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  triggeredByUser         User?                   @relation("TriggeredWorkflowRuns", fields: [triggeredByUserId], references: [id], onDelete: SetNull)
+  nodeExecutions          WorkflowNodeExecution[]
+  approvals               WorkflowApproval[]
+  events                  WorkflowRunEvent[]
+
+  @@index([workspaceId, status])
+  @@index([workflowId, createdAt(sort: Desc)])
+  @@index([triggerEventId])
+  @@map("workflow_runs")
+}
+
+model WorkflowNodeExecution {
+  id           String             @id @default(uuid()) @db.Uuid
+  runId        String             @map("run_id") @db.Uuid
+  workflowId   String             @map("workflow_id") @db.Uuid
+  workspaceId  String             @map("workspace_id") @db.Uuid
+  nodeId       String             @map("node_id") @db.VarChar(64)
+  nodeType     String             @map("node_type") @db.VarChar(48)
+  title        String             @db.VarChar(160)
+  status       WorkflowNodeStatus @default(PENDING)
+  attemptCount Int                @default(0) @map("attempt_count")
+  inputData    Json?              @map("input_data") @db.JsonB
+  outputData   Json?              @map("output_data") @db.JsonB
+  errorCode    String?            @map("error_code") @db.VarChar(64)
+  errorMessage String?            @map("error_message") @db.Text
+  durationMs   Int?               @map("duration_ms")
+  agentRunId   String?            @map("agent_run_id") @db.Uuid
+  toolCallId   String?            @map("tool_call_id") @db.Uuid
+  bridgeTaskId String?            @map("bridge_task_id") @db.Uuid
+  startedAt    DateTime?          @map("started_at") @db.Timestamptz(6)
+  completedAt  DateTime?          @map("completed_at") @db.Timestamptz(6)
+  createdAt    DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  run          WorkflowRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  workflow     WorkflowDefinition @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workspace    Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  approval     WorkflowApproval?
+
+  @@unique([runId, nodeId])
+  @@index([runId, status])
+  @@index([workspaceId])
+  @@map("workflow_node_executions")
+}
+
+model WorkflowApproval {
+  id                String                @id @default(uuid()) @db.Uuid
+  runId             String                @map("run_id") @db.Uuid
+  nodeExecutionId   String                @unique @map("node_execution_id") @db.Uuid
+  workflowId        String                @map("workflow_id") @db.Uuid
+  workspaceId       String                @map("workspace_id") @db.Uuid
+  nodeId            String                @map("node_id") @db.VarChar(64)
+  requestedByUserId String?               @map("requested_by_user_id") @db.Uuid
+  decidedByUserId   String?               @map("decided_by_user_id") @db.Uuid
+  status            ToolApprovalStatus    @default(PENDING)
+  title             String                @db.VarChar(160)
+  summary           String                @db.Text
+  contextPreview    Json                  @default("{}") @map("context_preview") @db.JsonB
+  expiresAt         DateTime              @map("expires_at") @db.Timestamptz(6)
+  decidedAt         DateTime?             @map("decided_at") @db.Timestamptz(6)
+  rejectionReason   String?               @map("rejection_reason") @db.Text
+  createdAt         DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime              @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  // Relations
+  run               WorkflowRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  nodeExecution     WorkflowNodeExecution @relation(fields: [nodeExecutionId], references: [id], onDelete: Cascade)
+  workflow          WorkflowDefinition    @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  workspace         Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requestedByUser   User?                 @relation("RequestedWorkflowApprovals", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  decidedByUser     User?                 @relation("DecidedWorkflowApprovals", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([runId, status])
+  @@index([expiresAt])
+  @@map("workflow_approvals")
+}
+
+model WorkflowRunEvent {
+  id          String      @id @default(uuid()) @db.Uuid
+  runId       String      @map("run_id") @db.Uuid
+  workspaceId String      @map("workspace_id") @db.Uuid
+  sequence    Int
+  eventType   String      @map("event_type") @db.VarChar(64)
+  nodeId      String?     @map("node_id") @db.VarChar(64)
+  payload     Json        @default("{}") @db.JsonB
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  run         WorkflowRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sequence])
+  @@index([runId, createdAt])
+  @@index([workspaceId])
+  @@map("workflow_run_events")
+}
+
+model WorkflowEventDispatchLog {
+  id          String               @id @default(uuid()) @db.Uuid
+  workspaceId String               @map("workspace_id") @db.Uuid
+  triggerId   String               @map("trigger_id") @db.Uuid
+  workflowId  String               @map("workflow_id") @db.Uuid
+  eventType   String               @map("event_type") @db.VarChar(96)
+  dedupKey    String               @map("dedup_key") @db.VarChar(160)
+  status      String               @db.VarChar(32)
+  runId       String?              @map("run_id") @db.Uuid
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  // Relations
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  trigger     WorkflowEventTrigger @relation(fields: [triggerId], references: [id], onDelete: Cascade)
+
+  @@unique([triggerId, dedupKey])
+  @@index([workspaceId, createdAt])
+  @@map("workflow_event_logs")
 }

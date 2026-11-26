@@ -10,6 +10,8 @@ import type {
   ProviderCredentials,
   ProviderStreamRequest,
   ProviderStreamEvent,
+  ProviderEmbedRequest,
+  ProviderEmbedResponse,
 } from "../interfaces/index.js";
 import { DEFAULT_GEMINI_CAPABILITIES } from "../capabilities/index.js";
 import {
@@ -386,6 +388,54 @@ export class GeminiAdapter implements IProviderAdapter {
       code: "UNKNOWN_PROVIDER_ERROR",
       message,
     });
+  }
+
+  public async embedTexts(
+    request: ProviderEmbedRequest,
+    abortSignal?: AbortSignal
+  ): Promise<ProviderEmbedResponse> {
+    const client = this.createClient(request.credentials);
+    const model = request.model || "gemini-embedding-001";
+    const batchSize = 32;
+    const allEmbeddings: number[][] = [];
+    let totalTokens = 0;
+
+    try {
+      for (let i = 0; i < request.texts.length; i += batchSize) {
+        if (abortSignal?.aborted) {
+          throw new Error("Embedding request aborted");
+        }
+        const batch = request.texts.slice(i, i + batchSize);
+        const res = await client.models.embedContent({
+          model,
+          contents: batch,
+          config: request.dimensions
+            ? { outputDimensionality: request.dimensions }
+            : undefined,
+        });
+
+        const returnedEmbeddings = res.embeddings || [];
+        for (const emb of returnedEmbeddings) {
+          if (Array.isArray(emb.values)) {
+            allEmbeddings.push(emb.values);
+          }
+          totalTokens += Math.round(emb.statistics?.tokenCount || 0);
+        }
+      }
+
+      const detectedDimensions =
+        allEmbeddings[0]?.length || request.dimensions || 768;
+
+      return {
+        provider: this.id,
+        model,
+        dimensions: detectedDimensions,
+        embeddings: allEmbeddings,
+        totalTokens,
+      };
+    } catch (err: unknown) {
+      throw this.mapGeminiError(err);
+    }
   }
 
   public getCapabilities(): ProviderCapabilityMap {

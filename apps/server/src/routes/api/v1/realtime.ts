@@ -10,6 +10,7 @@ import {
   streamPublisher,
 } from "../../../services/chat/index.js";
 import { swarmService, swarmStreamPublisher } from "../../../services/agents/index.js";
+import { workflowService, workflowStreamPublisher } from "../../../services/workflows/index.js";
 
 export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
   /**
@@ -84,6 +85,7 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
       let authenticatedUserId: string | null = null;
       const threadUnsubscribers = new Map<string, () => void>();
       const swarmUnsubscribers = new Map<string, () => void>();
+      const workflowUnsubscribers = new Map<string, () => void>();
 
       // Safe send helper
       const sendFrame = (
@@ -314,6 +316,64 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
             }
             return;
           }
+
+          // G. Handle "workflow.subscribe" action
+          if (action === "workflow.subscribe") {
+            if (!runId) {
+              sendFrame("error", undefined, {
+                code: "MISSING_RUN_ID",
+                message: "runId is required for workflow subscription",
+              });
+              return;
+            }
+
+            const runMeta = await prisma.workflowRun.findUnique({
+              where: { id: runId },
+              select: { id: true, workspaceId: true },
+            });
+            if (!runMeta) {
+              sendFrame("error", undefined, { code: "NOT_FOUND", message: "Workflow run not found" }, undefined, runId);
+              return;
+            }
+
+            try {
+              const snapshot = await workflowService.getRunDetail(
+                runMeta.id,
+                runMeta.workspaceId,
+                authenticatedUserId
+              );
+
+              if (workflowUnsubscribers.has(runId)) {
+                workflowUnsubscribers.get(runId)!();
+                workflowUnsubscribers.delete(runId);
+              }
+
+              const unsubWorkflow = workflowStreamPublisher.onWorkflowEvent(runId, (event) => {
+                sendFrame(event.type, event, undefined, undefined, runId);
+              });
+              workflowUnsubscribers.set(runId, unsubWorkflow);
+
+              sendFrame("workflow.snapshot", snapshot, undefined, undefined, runId);
+            } catch {
+              sendFrame(
+                "error",
+                undefined,
+                { code: "FORBIDDEN", message: "Unauthorized workflow run subscription" },
+                undefined,
+                runId
+              );
+            }
+            return;
+          }
+
+          // H. Handle "workflow.unsubscribe" action
+          if (action === "workflow.unsubscribe") {
+            if (runId && workflowUnsubscribers.has(runId)) {
+              workflowUnsubscribers.get(runId)!();
+              workflowUnsubscribers.delete(runId);
+            }
+            return;
+          }
         } catch (err: unknown) {
           sendFrame("error", undefined, {
             code: "INTERNAL_ERROR",
@@ -333,6 +393,10 @@ export const realtimeRoutes: FastifyPluginAsync = async (fastify) => {
           unsub();
         }
         swarmUnsubscribers.clear();
+        for (const unsub of workflowUnsubscribers.values()) {
+          unsub();
+        }
+        workflowUnsubscribers.clear();
       });
 
       socket.on("error", (err) => {

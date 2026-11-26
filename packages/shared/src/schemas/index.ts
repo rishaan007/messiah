@@ -158,7 +158,16 @@ export const RealtimeTicketRequestSchema = z.object({
 export type RealtimeTicketRequestInput = z.infer<typeof RealtimeTicketRequestSchema>;
 
 export const WebSocketClientFrameSchema = z.object({
-  action: z.enum(["auth", "thread.subscribe", "thread.unsubscribe", "swarm.subscribe", "swarm.unsubscribe", "ping"]),
+  action: z.enum([
+    "auth",
+    "thread.subscribe",
+    "thread.unsubscribe",
+    "swarm.subscribe",
+    "swarm.unsubscribe",
+    "workflow.subscribe",
+    "workflow.unsubscribe",
+    "ping",
+  ]),
   ticket: z.string().trim().min(16).max(256).optional(),
   threadId: z.string().uuid().optional(),
   runId: z.string().uuid().optional(),
@@ -674,3 +683,227 @@ export const ApproveSwarmPlanSchema = z.object({
 });
 
 
+
+
+// ==============================================================================
+// Phase 6: Vector Memory & Workflow Automation Schemas
+// ==============================================================================
+
+export const MemoryScopeSchema = z.enum(["PERSONAL", "WORKSPACE", "AGENT"]);
+export const MemorySourceTypeSchema = z.enum([
+  "MANUAL",
+  "CONVERSATION_SUMMARY",
+  "PREFERENCE",
+  "WORKSPACE_DECISION",
+  "AGENT_FINDING",
+  "WORKFLOW_OUTPUT",
+  "ARTIFACT",
+]);
+export const MemorySensitivitySchema = z.enum([
+  "PUBLIC_WORKSPACE",
+  "PERSONAL_PRIVATE",
+  "AGENT_RESTRICTED",
+  "SENSITIVE_REDACTED",
+]);
+
+export const CreateMemoryCollectionSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  scope: MemoryScopeSchema.default("WORKSPACE"),
+  agentId: z.string().uuid().optional().nullable(),
+  name: z.string().trim().min(2).max(128),
+  description: z.string().trim().max(1000).optional().nullable(),
+});
+export type CreateMemoryCollectionDto = z.infer<typeof CreateMemoryCollectionSchema>;
+
+export const CreateMemorySchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  scope: MemoryScopeSchema,
+  agentId: z.string().uuid().optional().nullable(),
+  collectionId: z.string().uuid().optional().nullable(),
+  sourceType: MemorySourceTypeSchema.default("MANUAL"),
+  sourceThreadId: z.string().uuid().optional().nullable(),
+  sourceMessageId: z.string().uuid().optional().nullable(),
+  sourceAgentRunId: z.string().uuid().optional().nullable(),
+  sourceWorkflowRunId: z.string().uuid().optional().nullable(),
+  title: z.string().trim().min(2).max(200),
+  content: z.string().trim().min(3).max(24000),
+  summary: z.string().trim().max(2000).optional().nullable(),
+  tags: z.array(z.string().trim().min(1).max(48)).max(20).default([]),
+  metadata: z.record(z.unknown()).default({}),
+  importance: z.number().min(0).max(1).default(0.6),
+  isPinned: z.boolean().default(false),
+  expiresAt: z.string().datetime().optional().nullable(),
+  embedImmediately: z.boolean().default(true),
+});
+export type CreateMemoryDto = z.infer<typeof CreateMemorySchema>;
+
+export const UpdateMemorySchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  title: z.string().trim().min(2).max(200).optional(),
+  content: z.string().trim().min(3).max(24000).optional(),
+  summary: z.string().trim().max(2000).optional().nullable(),
+  collectionId: z.string().uuid().optional().nullable(),
+  tags: z.array(z.string().trim().min(1).max(48)).max(20).optional(),
+  importance: z.number().min(0).max(1).optional(),
+  isPinned: z.boolean().optional(),
+  isArchived: z.boolean().optional(),
+  changeReason: z.string().trim().max(255).optional(),
+  expiresAt: z.string().datetime().optional().nullable(),
+});
+export type UpdateMemoryDto = z.infer<typeof UpdateMemorySchema>;
+
+export const SearchMemorySchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  query: z.string().trim().min(1).max(4000),
+  scopes: z.array(MemoryScopeSchema).min(1).max(3).default(["PERSONAL", "WORKSPACE"]),
+  agentIds: z.array(z.string().uuid()).max(16).optional(),
+  collectionId: z.string().uuid().optional().nullable(),
+  topK: z.number().int().min(1).max(25).default(6),
+  minSimilarity: z.number().min(0).max(1).default(0.15),
+  includeArchived: z.boolean().default(false),
+});
+export type SearchMemoryDto = z.infer<typeof SearchMemorySchema>;
+
+export const ClearMemoriesSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  scope: MemoryScopeSchema.optional(),
+  collectionId: z.string().uuid().optional(),
+  agentId: z.string().uuid().optional(),
+});
+export type ClearMemoriesDto = z.infer<typeof ClearMemoriesSchema>;
+
+export const UpdateMemorySettingsSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  embeddingProvider: SupportedProviderSchema.optional().nullable(),
+  embeddingModel: z.string().trim().min(1).max(128).optional().nullable(),
+  embeddingDimensions: z.number().int().min(128).max(3072).optional(),
+  providerConnectionId: z.string().uuid().optional().nullable(),
+  enableAutoCapture: z.boolean().optional(),
+  enableChatInjection: z.boolean().optional(),
+  enableSwarmInjection: z.boolean().optional(),
+  defaultTopK: z.number().int().min(1).max(25).optional(),
+  minSimilarityScore: z.number().min(0).max(1).optional(),
+  retentionDays: z.number().int().min(1).max(3650).optional().nullable(),
+});
+export type UpdateMemorySettingsDto = z.infer<typeof UpdateMemorySettingsSchema>;
+
+export const ReembedMemoriesSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  forceAll: z.boolean().default(true),
+});
+export type ReembedMemoriesDto = z.infer<typeof ReembedMemoriesSchema>;
+
+export const WorkflowNodeTypeSchema = z.enum([
+  "manual_trigger",
+  "schedule_trigger",
+  "event_trigger",
+  "run_agent",
+  "run_swarm",
+  "mcp_tool",
+  "bridge_capability",
+  "condition",
+  "approval_gate",
+  "transform",
+  "merge",
+  "store_result",
+  "completion",
+]);
+
+export const WorkflowNodeSpecSchema = z.object({
+  id: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .regex(/^[a-zA-Z0-9_-]+$/, "Node ID must be alphanumeric with _ or -"),
+  type: WorkflowNodeTypeSchema,
+  title: z.string().trim().min(1).max(160),
+  position: z.object({
+    x: z.number().finite(),
+    y: z.number().finite(),
+  }),
+  config: z.record(z.unknown()).default({}),
+  retryPolicy: z
+    .object({
+      maxAttempts: z.number().int().min(1).max(3).optional(),
+      backoffMs: z.number().int().min(100).max(60000).optional(),
+      sideEffectSafe: z.boolean().optional(),
+    })
+    .optional(),
+  timeoutMs: z.number().int().min(1000).max(600000).optional(),
+});
+
+export const WorkflowEdgeSpecSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  source: z.string().trim().min(1).max(64),
+  target: z.string().trim().min(1).max(64),
+  sourceHandle: z.string().trim().max(64).optional(),
+  targetHandle: z.string().trim().max(64).optional(),
+  label: z.string().trim().max(64).optional(),
+});
+
+export const WorkflowGraphSchema = z.object({
+  nodes: z.array(WorkflowNodeSpecSchema).min(1).max(40),
+  edges: z.array(WorkflowEdgeSpecSchema).max(80),
+});
+export type WorkflowGraphDto = z.infer<typeof WorkflowGraphSchema>;
+
+export const CreateWorkflowSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  name: z.string().trim().min(2).max(128),
+  slug: z
+    .string()
+    .trim()
+    .min(2)
+    .max(128)
+    .regex(/^[a-z0-9-]+$/)
+    .optional(),
+  description: z.string().trim().max(2000).optional().nullable(),
+  category: z.string().trim().min(2).max(64).default("automation"),
+  draftGraph: WorkflowGraphSchema,
+  defaultInputSchema: z.record(z.unknown()).optional().nullable(),
+});
+export type CreateWorkflowDto = z.infer<typeof CreateWorkflowSchema>;
+
+export const UpdateWorkflowSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  name: z.string().trim().min(2).max(128).optional(),
+  description: z.string().trim().max(2000).optional().nullable(),
+  category: z.string().trim().min(2).max(64).optional(),
+  status: z.enum(["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]).optional(),
+  draftGraph: WorkflowGraphSchema.optional(),
+  defaultInputSchema: z.record(z.unknown()).optional().nullable(),
+});
+export type UpdateWorkflowDto = z.infer<typeof UpdateWorkflowSchema>;
+
+export const PublishWorkflowSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  activate: z.boolean().default(true),
+});
+export type PublishWorkflowDto = z.infer<typeof PublishWorkflowSchema>;
+
+export const ValidateWorkflowGraphSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  graph: WorkflowGraphSchema,
+});
+export type ValidateWorkflowGraphDto = z.infer<typeof ValidateWorkflowGraphSchema>;
+
+export const TriggerWorkflowRunSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  triggerPayload: z.record(z.unknown()).default({}),
+  versionNumber: z.number().int().positive().optional(),
+  correlationId: z.string().trim().max(128).optional(),
+});
+export type TriggerWorkflowRunDto = z.infer<typeof TriggerWorkflowRunSchema>;
+
+export const ToggleWorkflowScheduleSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  enabled: z.boolean(),
+});
+export type ToggleWorkflowScheduleDto = z.infer<typeof ToggleWorkflowScheduleSchema>;
+
+export const WorkflowApprovalDecisionSchema = z.object({
+  workspaceId: z.string().uuid("Invalid workspace ID"),
+  reason: z.string().trim().max(500).optional(),
+});
+export type WorkflowApprovalDecisionDto = z.infer<typeof WorkflowApprovalDecisionSchema>;

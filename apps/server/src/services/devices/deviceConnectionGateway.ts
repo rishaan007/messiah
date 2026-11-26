@@ -521,6 +521,25 @@ export class DeviceConnectionGateway {
             if (completedTask?.agentRunId) {
               await this.resumeSwarmRunForBridgeTask(completedTask.agentRunId, completedTask.workspaceId, completedTask.userId);
             }
+            if (completedTask?.workflowRunId) {
+              await this.resumeWorkflowRunForBridgeTask(completedTask.workflowRunId, completedTask.workspaceId, completedTask.userId);
+            }
+            if (completedTask) {
+              const { workflowEventRouter } = await import("../workflows/workflowEventRouter.js");
+              workflowEventRouter
+                .emitDomainEvent({
+                  workspaceId: completedTask.workspaceId,
+                  eventType: "bridge.task.completed",
+                  dedupKey: `bridge-task-${completedTask.id}-completed`,
+                  triggeredByUserId: completedTask.userId,
+                  payload: {
+                    taskId: completedTask.id,
+                    capability: completedTask.capability,
+                    status: completedTask.status,
+                  },
+                })
+                .catch(() => {});
+            }
             break;
           }
 
@@ -541,6 +560,26 @@ export class DeviceConnectionGateway {
             if (failedTask?.agentRunId) {
               await this.resumeSwarmRunForBridgeTask(failedTask.agentRunId, failedTask.workspaceId, failedTask.userId);
             }
+            if (failedTask?.workflowRunId) {
+              await this.resumeWorkflowRunForBridgeTask(failedTask.workflowRunId, failedTask.workspaceId, failedTask.userId);
+            }
+            if (failedTask) {
+              const { workflowEventRouter } = await import("../workflows/workflowEventRouter.js");
+              workflowEventRouter
+                .emitDomainEvent({
+                  workspaceId: failedTask.workspaceId,
+                  eventType: "bridge.task.failed",
+                  dedupKey: `bridge-task-${failedTask.id}-failed`,
+                  triggeredByUserId: failedTask.userId,
+                  payload: {
+                    taskId: failedTask.id,
+                    capability: failedTask.capability,
+                    status: failedTask.status,
+                    errorMessage: failedTask.errorMessage,
+                  },
+                })
+                .catch(() => {});
+            }
             break;
           }
 
@@ -559,6 +598,9 @@ export class DeviceConnectionGateway {
             if (unknownTask?.agentRunId) {
               await this.resumeSwarmRunForBridgeTask(unknownTask.agentRunId, unknownTask.workspaceId, unknownTask.userId);
             }
+            if (unknownTask?.workflowRunId) {
+              await this.resumeWorkflowRunForBridgeTask(unknownTask.workflowRunId, unknownTask.workspaceId, unknownTask.userId);
+            }
             break;
           }
 
@@ -576,6 +618,9 @@ export class DeviceConnectionGateway {
               .catch(() => null);
             if (cancelledTask?.agentRunId) {
               await this.resumeSwarmRunForBridgeTask(cancelledTask.agentRunId, cancelledTask.workspaceId, cancelledTask.userId);
+            }
+            if (cancelledTask?.workflowRunId) {
+              await this.resumeWorkflowRunForBridgeTask(cancelledTask.workflowRunId, cancelledTask.workspaceId, cancelledTask.userId);
             }
             break;
           }
@@ -752,6 +797,45 @@ export class DeviceConnectionGateway {
             outboxEventId: outbox.id,
           },
           `swarm-${agentRunId}-bridge-${outbox.id}`
+        )
+        .catch(() => {});
+    } catch {}
+  }
+
+  private async resumeWorkflowRunForBridgeTask(
+    workflowRunId: string,
+    workspaceId: string,
+    userId: string
+  ): Promise<void> {
+    try {
+      const outbox = await prisma.outboxEvent.create({
+        data: {
+          eventType: "workflow.resume",
+          aggregateType: "WorkflowRun",
+          aggregateId: workflowRunId,
+          payload: {
+            kind: "workflow.execute",
+            runId: workflowRunId,
+            workspaceId,
+            userId,
+          },
+          status: "PENDING",
+        },
+      });
+      await prisma.workflowRun.updateMany({
+        where: { id: workflowRunId, status: "AWAITING_APPROVAL" },
+        data: { status: "RUNNING" },
+      });
+      await chatQueueManager
+        .enqueueWorkflowRun(
+          {
+            kind: "workflow.execute",
+            runId: workflowRunId,
+            workspaceId,
+            userId,
+            outboxEventId: outbox.id,
+          },
+          `workflow-${workflowRunId}-bridge-${outbox.id}`
         )
         .catch(() => {});
     } catch {}

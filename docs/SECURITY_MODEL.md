@@ -449,4 +449,19 @@ Every security-sensitive event writes an immutable record to the `audit_logs` ta
 
 ---
 
+## 15. Long-Term Memory Privacy, SQL Authorization & Workflow Safety (Phase 6)
+
+1. **Strict SQL-Level Scope & Tenant Isolation Before Ranking**:
+   - All `MemoryService.searchMemories` pgvector cosine distance and lexical full-text queries evaluate `workspace_id`, `PERSONAL` (`owner_user_id = $userId`), `AGENT` (`agent_id = ANY($authorizedAgentIds)`), expiration TTL, and `memory_access_policies` deny rules inside SQL `WHERE` clauses **prior to** similarity ordering and `LIMIT $topK`. Cross-user personal memories and cross-agent episodic memories never enter top-K candidates.
+2. **Secret Exclusion & Prompt Injection Delimiters**:
+   - `MemorySanitizer` blocks persistence (`MEMORY_SECRET_REJECTED`, HTTP 422) of API keys, OAuth/bearer tokens, PEM private keys, and database credentials in manual writes, and scrubs secrets before storing optional auto-captured summaries (`SENSITIVE_REDACTED`).
+   - Retrieved memories are wrapped inside `<UNTRUSTED_MEMORY_CONTEXT trusted="false">` delimiters with explicit provenance tags (`id`, `scope`, `source_type`, `score`, `version`) so injected text never overrides system rules or tool authorization policies.
+3. **Zero-Eval Workflow Conditions & Event Loop Prevention**:
+   - `WorkflowDagValidator` rejects cyclic graphs (`CYCLE_DETECTED`), incoming edges to triggers, and script/code fields in transforms (`UNSAFE_SCRIPT_DISALLOWED`).
+   - `SafeExpressionEvaluator` executes only allowlisted path comparisons and boolean operators, explicitly rejecting `eval`, `Function`, `process`, `__proto__`, `constructor`, and `prototype`.
+   - `WorkflowEventRouter` enforces direct self-trigger blocking (`sourceWorkflowId === trig.workflowId`), per-trigger cooldowns, `(triggerId, dedupKey)` database uniqueness, and `MAX_RECURSION_DEPTH = 3`.
+   - `approval_gate` nodes enforce workspace `OWNER` / `ADMIN` RBAC and single-use consumption; MCP tool and Bridge capability nodes continue invoking full Phase 3B / Phase 4B approval and sandbox boundaries.
+
+---
+
 _End of Document: Messiah Security Architecture & Zero-Trust Model._
